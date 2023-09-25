@@ -1,0 +1,370 @@
+---
+title: "10_Cell_Type_Labeling"
+author: "Jacob Mitchell"
+date: "2023-01-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load R packages}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library("scatterHatch")
+
+sessionInfo()
+```
+
+```{r Create Directories}
+result_dir <- "processed_data/10_Cell_Type_Labeling"
+if(!dir.exists(result_dir)){
+  dir.create(result_dir)
+}
+figure_dir <- "figures/10_Cell_Type_Labeling"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r Load Data with Cluster Assignments}
+seurat <- 
+  readRDS("processed_data/05_UMAP_Embedding_and_Clustering/05_UMAP_Cluster_mouse_ici_scRNAseq.rds")
+```
+
+```{r Rename Clusters based on Marker Expression}
+DimPlot(seurat, group.by = "Louvain_cluster_0.6", label = TRUE) +
+  theme(legend.position = "none")
+
+DimPlot(seurat, group.by = "Louvain_cluster_1", label = TRUE) +
+  theme(legend.position = "none")
+
+# remove small and artifact clusters
+seurat <- seurat[, !seurat$Louvain_cluster_0.6 %in%
+                   as.character(24:29)]
+
+  
+DimPlot(seurat, group.by = "Louvain_cluster_0.6", label = TRUE) +
+  theme(legend.position = "none")
+# data frame of the Louvain 0.6 and 1.0 clustering to distinguish NK cells
+louvain_clusters <- data.frame(
+  "Louvain_0.6" = seurat$Louvain_cluster_0.6,
+  "Louvain_1.0" = seurat$Louvain_cluster_1
+)
+rownames(louvain_clusters) <- rownames(seurat@meta.data)
+
+cell_type <- 
+  apply(
+    louvain_clusters, 1,
+    FUN = function(x){
+      if(x[1] %in% c("5")){
+        return("cytotoxic_CD8_T")
+      }
+      if(x[1] %in% c("3")){
+        return("exhausted_CD8_T")
+      }
+      if(x[1] %in% c("15")){
+        return("cycling_CD8_T")
+      }
+      if(x[1] %in% c("11")){
+        return("effector_CD4_T")
+      }
+      if(x[1] %in% c("9") & x[2] %in% c("11")){
+        return("naive_CD8_T")
+      }
+      if(x[1] %in% c("9") & x[2] %in% c("13")){
+        return("effector_CD4_T")
+      }
+      if(x[1] %in% c("9") & x[2] %in% c("16")){
+        return("exhausted_CD8_T")
+      }
+      if(x[1] %in% c("9") & x[2] %in% c("21")){
+        return("natural_killer")
+      }
+      if(x[1] %in% c("13")){
+        return("regulatory_CD4_T")
+      }
+      if(x[1] %in% c("8")){
+        return("B")
+      }
+      if(x[1] %in% c("2", "7")){
+        return("myeloid_derived_supressor")
+      }
+      if(x[1] %in% c("10")){
+        return("monocyte")
+      }
+      if(x[1] %in% c("1", "4", "22")){
+        return("tumor_associated_macrophage")
+      }
+      if(x[1] %in% c("12", "19")){
+        return("dendritic_cell")
+      }
+      if(x[1] %in% c("17", "21")){
+        return("endothelial")
+      }
+      if(x[1] %in% c("0", "6", "14", "16", "18", "20", "23")){
+        return("cancer")
+      }
+      
+    }
+)
+
+table(as.character(cell_type))
+
+seurat$cell_type <- as.character(cell_type)
+
+umap_plot <- DimPlot(seurat, group.by = "cell_type")
+print(umap_plot)
+ggsave(plot = umap_plot,
+       filename = paste0(figure_dir, "/cell_type_umap.png"),
+       width = unit(8, "in"),
+       height = unit(6, "in"))
+
+# plot without legend
+umap_plot_no_l <- DimPlot(seurat, group.by = "cell_type") +
+  theme(legend.position = "none")
+ggsave(plot = umap_plot_no_l,
+       filename = paste0(figure_dir, "/cell_type_umap_nolegend.png"),
+       width = unit(6, "in"),
+       height = unit(6, "in"))
+
+# Scatter Hatch versions of plots
+ser_meta <- seurat@meta.data
+ser_meta$cellID <- paste0('cell_', 1:nrow(ser_meta))
+
+ser_meta$Xt <- seurat@reductions$umap@cell.embeddings[,1]
+ser_meta$Yt <- seurat@reductions$umap@cell.embeddings[,2]
+
+ser_pattern_list <-
+  list(
+    list(pattern = "+", lineWidth = 0.2), # B
+    list(pattern = "x", angle = c(45,135), lineWidth = 0.2), # cancer
+    list(pattern = ""), # cycling_CD8_T
+    list(pattern = ""), # cytotoxic_CD8_T
+    list(pattern = "/", angle= c(135), lineWidth = 0.2), # dendritic_cell
+    list(pattern = ""), # effector_CD4_T
+    list(pattern = "-", lineWidth = 0.2), # endothelial
+    list(pattern = ""), # exhausted_CD8_T
+    list(pattern = "/", angle= c(45), lineWidth = 0.2), # monocyte
+    list(pattern = "|", lineWidth = 0.2), # myeloid_derived_supressor
+    list(pattern = ""), # naive_CD8_T
+    list(pattern = ""), # natural_killer
+    list(pattern = ""), # regulatory_CD4_T
+    list(pattern = "/", angle= c(45), lineWidth = 0.2) # tumor_associated_macrophage
+  )
+
+ser_color_pal <-
+  c(
+    "#FFBE2D", # B
+    "#56B4E9", # cancer
+    "#666666", # cycling_CD8_T
+    "#2CFFC6", # cytotoxic_CD8_T
+    "#F0E422", # dendritic_cell
+    "#FFBE2D", # effector_CD4_T
+    "#999999", # endothelial
+    "#F0E442", # exhausted_CD8_T
+    "#2CFFC6", # monocyte
+    "#D99BBD", # myeloid_derived_supressor
+    "#1C91D4", # naive_CD8_T
+    "#3D3D3D", # natural_killer
+    "#AA9F0D", # regulatory_CD4_T
+    "#1C91D4"  # tumor_associated_macrophage
+  )
+
+T_cell_pal <-
+  c(
+    "#666666", # cycling_CD8_T
+    "#2CFFC6", # cytotoxic_CD8_T
+    "#FFBE2D", # effector_CD4_T
+    "#F0E442", # exhausted_CD8_T
+    "#1C91D4", # naive_CD8_T
+    "#AA9F0D" # regulatory_CD4_T
+  )
+
+sH_ser <- scatterHatch(data = ser_meta, x = "Xt", y = "Yt",
+                    color_by = "cell_type",
+                    legendTitle = "Cell Type",
+                    colorPalette = ser_color_pal,
+                    patternList = ser_pattern_list)
+sH_ser
+
+sH_plot <- sH_ser
+ggsave(plot = sH_plot,
+       filename = paste0(figure_dir, "/cell_type_umap.pdf"),
+       width = unit(8, "in"),
+       height = unit(6, "in"))
+
+# plot without legend
+sH_plot_no_l <- sH_ser + theme(legend.position = "none")
+ggsave(plot = sH_plot_no_l,
+       filename = paste0(figure_dir, "/cell_type_umap_nolegend.pdf"),
+       width = unit(6, "in"),
+       height = unit(6, "in"))
+```
+
+```{r Treatment Comparisons of T cell Proportions}
+# stacked barplots of cell types
+cell_meta_data <- seurat@meta.data
+cell_meta_data$treatment <- as.factor(cell_meta_data$treatment)
+
+prop <- data.frame(treatment = levels(cell_meta_data$treatment))
+prop[["vaccine"]] <- ifelse(grepl("^PancVAX", prop$treatment),
+                            "PancVAX",
+                            "unvaccinated")
+# counts of cells in each treatment group
+prop[["total_count"]] <- sapply(prop[["treatment"]],
+                                function(x){
+                                  nrow(cell_meta_data[cell_meta_data$treatment == x,])
+                                })
+# counts of cells in each cluster
+louvain_clusters <- levels(as.factor(seurat$cell_type))
+treatments <- levels(cell_meta_data$treatment)
+for(i in louvain_clusters){
+  prop[[paste0("cluster_", i, "_count")]] <-
+    sapply(prop[["treatment"]],
+           function(x){
+             nrow(cell_meta_data[cell_meta_data$treatment == x & 
+                                   cell_meta_data$cell_type == i,])
+             })
+}
+prop_c <- prop
+# proportions of cells over total counts in each treatment group belonging to each cluster
+for(i in colnames(prop)[grepl("^cluster_", colnames(prop))]){
+  proportion <- gsub("_count$", "_proportion", i)
+  prop[[proportion]] <- prop[[i]]/prop[["total_count"]]
+}
+
+prop_stacked <- pivot_longer(prop,
+                             cols = colnames(prop)[grep("proportion$", colnames(prop))])
+prop_stacked$name <- gsub("^cluster_", "",
+                          gsub("_proportion$", "", prop_stacked$name))
+colnames(prop_stacked) <- gsub("name", "cell_type", 
+                               gsub("value", "proportion", colnames(prop_stacked)))
+prop_stacked$treatment <- factor(prop_stacked$treatment,
+                                 levels = c(
+                                   "Untreated",
+                                   "Anti-CTLA-4",
+                                   "Anti-PD-1",
+                                   "Anti-PD-1 + Anti-CTLA-4",
+                                   "PancVAX",
+                                   "PancVAX + Anti-CTLA-4",
+                                   "PancVAX + Anti-PD-1",
+                                   "PancVAX + Anti-PD-1 + Anti-CTLA-4"
+                                 ))
+
+all_stack <- ggplot(prop_stacked, 
+                    aes(x = treatment, y = proportion, fill = cell_type)) +
+  geom_bar(position = "stack", stat = "identity") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+print(all_stack)
+ggsave(plot = all_stack,
+       filename = paste0(figure_dir, "/All_cell_treatment_stacked_proportion.pdf"),
+       width = unit(8, "in"), height = unit(6, "in"))
+```
+
+```{r}
+# stacked bar plot of just T cell types
+t_prop <- data.frame(treatment = levels(cell_meta_data$treatment))
+
+# T cell names
+t_cell_types <- unique(seurat$cell_type)[grepl("T$", unique(seurat$cell_type))]
+
+t_prop[["vaccine"]] <- ifelse(grepl("^PancVAX", prop$treatment),
+                            "PancVAX",
+                            "unvaccinated")
+# counts of cells in each treatment group
+t_prop[["tcell_count"]] <- sapply(t_prop[["treatment"]],
+                                function(x){
+                                  nrow(cell_meta_data[cell_meta_data$treatment == x &
+                                                        cell_meta_data$cell_type %in% t_cell_types,])
+                                })
+# counts of cells in each T cell groups
+# louvain_clusters <- levels(as.factor(seurat$cell_type))
+treatments <- levels(cell_meta_data$treatment)
+for(i in t_cell_types){
+  t_prop[[paste0("cluster_", i, "_count")]] <-
+    sapply(t_prop[["treatment"]],
+           function(x){
+             nrow(cell_meta_data[cell_meta_data$treatment == x & 
+                                   cell_meta_data$cell_type == i,])
+             })
+}
+t_prop_c <- t_prop
+# proportions of cells over total counts in each treatment group belonging to each cluster
+for(i in colnames(t_prop)[grepl("^cluster_", colnames(t_prop))]){
+  proportion <- gsub("_count$", "_proportion", i)
+  t_prop[[proportion]] <- t_prop[[i]]/t_prop[["tcell_count"]]
+}
+
+t_prop_stacked <- pivot_longer(t_prop,
+                             cols = colnames(t_prop)[grep("proportion$", colnames(t_prop))])
+t_prop_stacked$name <- gsub("^cluster_", "",
+                          gsub("_proportion$", "", t_prop_stacked$name))
+colnames(t_prop_stacked) <- gsub("name", "cell_type", 
+                               gsub("value", "proportion", colnames(t_prop_stacked)))
+t_prop_stacked$treatment <- factor(t_prop_stacked$treatment,
+                                 levels = c(
+                                   "Untreated",
+                                   "Anti-PD-1",
+                                   "Anti-CTLA-4",
+                                   "Anti-PD-1 + Anti-CTLA-4",
+                                   "PancVAX",
+                                   "PancVAX + Anti-PD-1",
+                                   "PancVAX + Anti-CTLA-4",
+                                   "PancVAX + Anti-PD-1 + Anti-CTLA-4"
+                                 ))
+stack_t_plot <-
+  ggplot(t_prop_stacked, 
+         aes(x = treatment, y = proportion, fill = cell_type)) +
+  geom_bar(position = "stack", stat = "identity") +
+  scale_fill_manual(values = T_cell_pal) +
+  ylab("T cell proportion") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 25, vjust = 1, hjust=1),
+        axis.title.x = element_blank())
+stack_t_plot
+ggsave(plot = stack_t_plot,
+       filename = paste0(figure_dir, "/T_cell_treatment_stacked_proportion.pdf"),
+       width = unit(8, "in"), height = unit(6, "in"))
+# colors corrected to match UMAP in inkscape
+```
+
+```{r}
+# Dotplot of marker genes justifying T cell subtyping
+markers <- list(
+  "T_identity" = c("Cd3e", "Cd8a", "Cd4"),
+  "cytotoxic" = c("Gzmb", "Ly6a"),
+  "exhaustion" = c("Pdcd1", "Lag3"),
+  "cycling" = c("Top2a")
+)
+
+FeaturePlot(seurat, "Lag3")
+
+dp_markers <-
+  DotPlot(seurat[, seurat$cell_type %in% t_cell_types],
+          group.by = "cell_type",
+          features = markers) +
+  theme(axis.text.x = element_text(angle = 35, vjust = 1, hjust=1),
+        axis.title = element_blank(),
+        axis.line.x.top = element_line(size = 5))
+print(dp_markers)
+# legend materials moved with inkscape (column titles and expression legend)
+ggsave(plot = dp_markers,
+       filename = paste0(figure_dir, "/T_cell_markers_dotplot.pdf"),
+       width = unit(8, "in"), height = unit(6, "in"))
+
+# no legend
+ggsave(plot = dp_markers + theme(legend.position = "none"),
+       filename = paste0(figure_dir, "/T_cell_markers_dotplot_nolegend.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+```
+
+```{r Save Seurat Object with Assigned Cell Types}
+saveRDS(seurat,
+        file = paste0(result_dir, "/10_cell_type_assigned_mouse_ici_scRNAseq.rds"))
+```
+

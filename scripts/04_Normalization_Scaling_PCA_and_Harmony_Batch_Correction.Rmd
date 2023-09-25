@@ -1,0 +1,156 @@
+---
+title: "04_Normalization_Scaling_PCA_and_Harmony_Batch_Correction"
+author: "Jacob Mitchell"
+date: '2022-07-28'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages}
+library(Seurat)
+library(harmony)
+library(ggplot2)
+
+sessionInfo()
+```
+
+```{r Result and Plot Directories}
+results_dir <- "processed_data/04_Normalization_Scaling_PCA_and_Harmony_Batch_Correction"
+if(!dir.exists(results_dir)){
+  dir.create(results_dir)
+}
+figure_dir <- "figures/04_Normalization_Scaling_PCA_and_Harmony_Batch_Correction"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r Custom Functions}
+# save plot as 6" x 6" png
+plot_save_png <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".png"),
+         width = 6, height = 6)
+}
+# save plot as 6" x 6" pdf
+plot_save_pdf <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".pdf"),
+         width = unit(6, "in"), height = unit(6, "in"))
+}
+```
+
+```{r Load in Single Cell Data}
+seurat <- readRDS("processed_data/03_cell_cycle_scoring/03_cell_cycle_score_mouse_ici_scRNAseq.rds")
+```
+
+```{r Normalization}
+seurat <- NormalizeData(seurat, scale.factor = 10000)
+```
+
+```{r Identify Variable Features}
+seurat <- FindVariableFeatures(seurat,
+                               selection.method = "vst", nfeatures = 2000)
+top10 <- head(VariableFeatures(seurat), 10)
+plot_vf <- LabelPoints(plot = VariableFeaturePlot(seurat),
+                       points = top10, repel = TRUE)
+print(plot_vf)
+plot_save_png(plot = plot_vf,
+              plot_name = "variable_features")
+```
+
+```{r Scale Top Variable Features} 
+# scale with regression on cell cycle scores
+
+seurat <- ScaleData(seurat, vars.to.regress = c("S.Score", "G2M.Score")) 
+
+# the top 2000 variable features are used here for PCA and scaled to save on file size
+# as compared to scaling all features initially
+# additional applications of the scaled expression values will use the full scaled
+# matrix since the sparse matrix of all genes' log-normalized values are still
+# stored in the object.
+```
+
+```{r Linear Dimensional Reduction with PCA}
+seurat <- RunPCA(seurat, features = VariableFeatures(seurat))
+```
+
+```{r Assess PCA Results}
+# top and bottom 10 genes in the first 30 PCs
+print(seurat[["pca"]], dims = 1:50, nfeatures = 10)
+
+# plot cells on first two pricipal components
+pca_plot <- DimPlot(seurat, reduction = "pca")
+pca_plot_w <- DimPlot(seurat, reduction = "pca", group.by = "10x_well")
+pca_plot_b <- DimPlot(seurat, reduction = "pca", group.by = "batch")
+pca_plot_p <- DimPlot(seurat, reduction = "pca", group.by = "Phase")
+print(pca_plot)
+print(pca_plot_w)
+print(pca_plot_b)
+print(pca_plot_p)
+plot_save_png(pca_plot, plot_name = "pca_experiment")
+plot_save_png(pca_plot_w, plot_name = "pca_10x_well")
+plot_save_png(pca_plot_b, plot_name = "pca_batch")
+plot_save_png(pca_plot_p, plot_name = "pca_phase")
+
+# heatmaps of the first 20 principal components
+pc_heat_plot <- DimHeatmap(seurat, dims = 1:20, cells = 500, balanced = TRUE)
+print(pc_heat_plot)
+# ggsave(plot = pc_heat_plot,
+#        filename = paste0(figure_dir, "/heatmap_pca_1_30_features.png"),
+#        width = 12, height = 30)
+
+# Elbowplot of variance explained by each PC
+elbow_plot <- ElbowPlot(seurat, ndims = 50)
+print(elbow_plot)
+plot_save_png(elbow_plot, "elbowplot_pca_variance")
+```
+
+```{r Batch Corrected PCs with Harmony}
+# batch effects considered on samples annotated as whole tumor or immune
+
+seurat <- RunHarmony(seurat, group.by.vars = "batch", reduction = "pca",
+                     project.dim = FALSE)
+
+# top and bottom 10 genes in the first 30 PCs
+print(seurat[["pca"]], dims = 1:50, nfeatures = 10)
+
+# plot cells on first two pricipal components
+har_plot <- DimPlot(seurat, reduction = "harmony")
+har_plot_w <- DimPlot(seurat, reduction = "harmony", group.by = "10x_well")
+har_plot_b <- DimPlot(seurat, reduction = "harmony", group.by = "batch")
+har_plot_p <- DimPlot(seurat, reduction = "harmony", group.by = "Phase")
+print(har_plot)
+print(har_plot_w)
+print(har_plot_b)
+print(har_plot_p)
+plot_save_png(har_plot, plot_name = "harmony_experiment")
+plot_save_png(har_plot_w, plot_name = "harmony_10x_well")
+plot_save_png(har_plot_b, plot_name = "harmony_batch")
+plot_save_png(har_plot_p, plot_name = "harmony_phase")
+
+# heatmaps of the first 20 principal components
+# hm_heat_plot <- DimHeatmap(seurat, reduction = "harmony", cells = 500, balanced = TRUE)
+# print(hm_heat_plot)
+# ggsave(plot = hm_heat_plot,
+#        filename = paste0(figure_dir, "/heatmap_harmony_1_30_features.png"),
+#        width = 12, height = 30)
+
+# Elbowplot of variance explained by each PC
+elbow_plot_h <- ElbowPlot(seurat, reduction = "harmony", ndims = 50)
+print(elbow_plot_h)
+plot_save_png(elbow_plot_h, "elbowplot_harmony_variance")
+```
+
+```{r}
+saveRDS(seurat,
+        file = paste0(results_dir, "/04_scaled_batch_correction_mouse_ici_scRNAseq.rds"))
+```
+

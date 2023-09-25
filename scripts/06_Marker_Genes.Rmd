@@ -1,0 +1,118 @@
+---
+title: "06_Marker_Genes"
+author: "Jacob Mitchell"
+date: '2022-07-29'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages}
+library(Seurat)
+library(ggplot2)
+
+sessionInfo()
+```
+
+```{r Result and Plotting Directories}
+results_dir <- "processed_data/06_Marker_Genes"
+if(!dir.exists(results_dir)){
+  dir.create(results_dir)
+}
+figure_dir <- "figures/06_Marker_Genes"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r Custom Functions}
+# save plot as 6" x 6" png
+plot_save_png <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".png"),
+         width = 6, height = 6)
+}
+# save plot as 6" x 6" pdf
+plot_save_pdf <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".pdf"),
+         width = unit(6, "in"), height = unit(6, "in"))
+}
+```
+
+```{r Load Data}
+seurat <- readRDS("processed_data/05_UMAP_Embedding_and_Clustering/05_UMAP_Cluster_mouse_ici_scRNAseq.rds")
+```
+
+```{r Marker Genes}
+marker_lists <- list()
+marker_lists[["immune_cells"]] <- c("Ptprc", "Cd3e", "Cd4", "Cd8a", "Cd14")
+marker_lists[["mast cells"]] <- c("Kit", "Fcgr1", "Itb7")
+marker_lists[["basophils"]] <- c("Cd200r3", "Fcgr1", "Itga2b", "Itga2")
+marker_lists[["eosinophils"]] <- c("Itgam", "Ccr3", "Adgre1", "Siglecf", "Ccr3", "Il4ra")
+marker_lists[["platelets"]] <- c("Itga2b", "Cd9", "Ppbp")
+marker_lists[["hematopoietic stem cells"]] <- c("Cd48", "Kit", "Slamf1", "Ly6a", "Kdr", "Emcn")
+marker_lists[["neutrophils"]] <- c("Itgam", "Ly6a2", "Ly6g", "Gsr", "Cxcr4", "S100a9")
+marker_lists[["dendritic_cells"]] <- c("Itgax", "H2-Ab1", "H2-Aa", "H2-Eb1", "H2-Eb2", "Btla", "Cd24a", "Csf1r", "Kit", "Fit3")
+marker_lists[["plasmacytoid_dendritic_cells"]] <- c("Itgam", "Bst2", "Ly6c", "Klra17", "Siglech", "Tlr7", "Tlr9")
+marker_lists[["macrophages"]] <- c("Adgre1", "Cd68", "Fcgr1", "MerTK")
+marker_lists[["MMDSC"]] <- c("Itgam", "Ly6c")
+marker_lists[["GMDSC"]] <- c("Itgam", "Ly6c", "Ly6g")
+
+marker_lists[["CD4_naive_cells"]] <- c("Cd3e", "Cd4", "Ccr7", "Sell")
+marker_lists[["CD4_helper_cells"]] <- c("Cd3e", "Cd4", "Cxcr3", "Cxcr5", "Ccr4", "Ccr6", "Ifng", "Ptgdr2")
+marker_lists[["CD8_naive_cells"]] <- c("Cd3e", "Cd8a", "Ccr7", "Sell")
+marker_lists[["CD8_effector_cells"]] <- c("Cd3e", "Cd8a", "Gzma", "Gzmb", "Cd69", "Tnfrsf9", "Gnly", "Eomes")
+marker_lists[["CD8_exhausted_cells"]] <- c("Cd3e", "Cd8a", "Tigit", "Pdcd1", "Ctla4", "Lag3", "Havcr2", "Cd244a")
+marker_lists[["regulatory_T_cells"]] <- c("Cd3e", "Cd4", "Foxp3", "Ctla4")
+marker_lists[["gamma_delta_T_cells"]] <- c("Tcrd", "Tcrg", "Il2ra")
+
+marker_lists[["B_cells"]] <- c("Cd19", "Ms4a1")
+marker_lists[["plasma_B_cells"]] <- c("Sdc1")
+marker_lists[["natural_killer_cells"]]<- c("Itga2", "Itgam", "Il2rb", "Klrb1", "Klrk1", "Ncr1", "Nkg7")
+
+marker_lists[["carcinoma"]] <- c("Krt18")
+
+all_markers <- c()
+for(i in marker_lists){
+  all_markers <- c(all_markers, i)
+}
+all_markers <- unique(all_markers)
+```
+
+```{r Plot Collections of Marker Genes and Individual Marker Genes}
+a <- 1
+for (ml in marker_lists){
+  plot <- FeaturePlot(seurat, reduction = "umap",
+                      features = ml, ncol = 4)
+  plot_name <- names(marker_lists)[a]
+  plot_file <- paste0(figure_dir, "/cell_markers_", plot_name, "_umap.png")
+  ggsave(plot,
+         filename = plot_file,
+         width = 12,
+         height = ceiling(length(ml)/4) * 3)
+  a <- a + 1
+}
+rm(a)
+
+for (m in all_markers){
+  if(!(m %in% rownames(seurat))){
+    cat("gene ", m , " not present in data set")
+    next
+  }
+  
+  p <- FeaturePlot(seurat, features = m)
+  print(p)
+  plot_save_png(p, plot_name = paste0("umap_", m))
+  
+  v <- VlnPlot(seurat, features = m, group.by = "Louvain_cluster_0.6", pt.size = 0)
+  print(v)
+  plot_save_png(v, plot_name = paste0("violin_", m))
+}
+```

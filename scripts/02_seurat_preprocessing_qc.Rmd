@@ -1,0 +1,353 @@
+---
+title: "02_seurat_preprocessing_qc"
+author: "Jacob Mitchell"
+date: '2022-07-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages}
+library(Seurat)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+
+sessionInfo()
+```
+
+```{r Make Directories}
+results_dir <- "processed_data/02_seurat_preprocessing_qc"
+if(!dir.exists(results_dir)){
+  dir.create(results_dir)
+}
+figure_dir <- "figures/02_seurat_preprocessing_qc"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r Custom Plotting Functions}
+# custom plotting functions
+
+# save plot as 6" x 6" png
+plot_save_png <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".png"),
+         width = 6, height = 6)
+}
+# save plot as 6" x 6" pdf
+plot_save_pdf <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".pdf"),
+         width = unit(6, "in"), height = unit(6, "in"))
+}
+
+# violin plots of quality control features
+qc_feature_vln <- function(seurat, feature, show.jitter = TRUE, group.by = NULL){
+  plot <- VlnPlot(seurat,
+                  features = feature,
+                  group.by = group.by,
+                  pt.size = 0) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+          legend.position = "none")
+  if(show.jitter){
+    plot <- plot + 
+      geom_jitter(data = plot$data, width = 0.05, size = 0.1)
+    }
+  return(plot)
+}
+# sparsity calculation as the percentage of non-zero elements in a matrix
+sparsity <- function(matrix){
+  # number of non-zero elements
+  nz <- sum(tabulate(matrix@i + 1))
+  mat_cells <- prod(dim(matrix))
+  return(signif((nz / mat_cells)*100, 5))
+}
+```
+
+```{r Load Data}
+seurat <- readRDS("data/01_aggr_merged_scRNA_TCR.rds")
+```
+
+```{r Annotate Mito, Ribo, Hemo Genes}
+# count genes in the rows of the counts matrix with non-zero counts values
+seurat[["RNA"]][["cells"]] <- tabulate(seurat[["RNA"]]@counts@i + 1)
+
+# annotate mitochondrial, ribosomal, and hemoglobin genes
+# mitochondrial genes
+seurat[["RNA"]][["mt"]] <- grepl("^mt-", rownames(seurat[["RNA"]][[]]))
+# ribosomal
+seurat[["RNA"]][["ribo"]] <- grepl("^Rp[s|l]", rownames(seurat[["RNA"]][[]]))
+# hemoglobin
+seurat[["RNA"]][["hemo"]] <- grepl("^Hb[a|b|q]", rownames(seurat[["RNA"]][[]]))
+
+# percent counts of these features
+seurat[["percent_mt"]] <- PercentageFeatureSet(seurat, pattern = "^mt-")
+seurat[["percent_ribo"]] <- PercentageFeatureSet(seurat, pattern = "^Rp[s|l]")
+seurat[["percent_hemo"]] <- PercentageFeatureSet(seurat, pattern = "^Hb[a|b|q]")
+```
+
+```{r Plot QC Features}
+# order the 10x well number as a factor from 1 to 16
+seurat@meta.data[["10x_well"]] <- factor(seurat$`10x_well`, levels = as.character(1:16))
+
+qc_features <- c("percent_mt", "percent_ribo", "percent_hemo", "nFeature_RNA", "nCount_RNA")
+
+for(qc in qc_features){
+  plot_j <- qc_feature_vln(seurat, feature = qc, show.jitter = TRUE)
+  plot_n <- qc_feature_vln(seurat, feature = qc, show.jitter = FALSE)
+  plot_g <- qc_feature_vln(seurat, feature = qc, show.jitter = FALSE, 
+                           group.by = "10x_well")
+  print(plot_j)
+  print(plot_g)
+  # ggsave(filename = paste0(figure_dir, "/pre_filter_", qc, "_violin_jitter.png"))
+  plot_save_png(plot_j,
+                plot_name = paste0("pre_filter_", qc, "_violin_jitter"))
+  plot_save_png(plot_n,
+                plot_name = paste0("pre_filter_", qc, "_violin"))
+  plot_save_png(plot_g,
+                plot_name = paste0("pre_filter_", qc, "_violin_10x_well"))
+  
+  plot_scatter <- FeatureScatter(seurat, feature1 = "nCount_RNA",
+                                 feature2 = qc) +
+    theme(legend.position = "none")
+  print(plot_scatter)
+  plot_save_png(plot_scatter,
+                plot_name = paste0("pre_filter_", qc, "_nCount_scatter"))
+  plot_scatter <- FeatureScatter(seurat, feature1 = "nFeature_RNA",
+                                 feature2 = qc) +
+    theme(legend.position = "none")
+  print(plot_scatter)
+  plot_save_png(plot_scatter,
+                plot_name = paste0("pre_filter_", qc, "_nFeature_scatter"))
+}
+```
+
+```{r Filtering Parameters}
+# I arrived at these parameters after iterating through five sets of qc parameters
+# with progressively more lax standards in order to determine the relative
+# point at which I found that easing the parameters did not improve my yield
+# of the T cells we are primarily focused on in this analysis.
+
+# Past this point, raising max cutoff values led to increases in the number of
+# macrophages and epithelial/cancer cells in the data with minimal improvement
+# in the number of T cells. For further details, see my lab notebook from
+# 7/20/22 to 7/25/22 and the outputs from scripts in the scratch directory
+
+# scratch/20220720_QC_parameter_changes.html
+# scratch/20220721_Process_Param_Results.html
+# scratch/20220725_cell_type_counts_with_altered_parameters.html
+
+# parameters used in this script are based on parameter set 3
+p <- list()
+
+## Gene Filtering
+# Minimum number of cells expressing gene
+p$min_cells <- 3
+
+## Cell Filtering
+# Minimum number of gene expressed
+p$min_genes <- 200
+# Maximum number of genes expressed
+p$max_genes <- 3000
+# Minimum number of counts
+p$min_counts <- 1000
+# Maximum number of counts
+p$max_counts <- 10000
+# Maximum percentage of mitochondrial reads
+p$max_mito_percent <- 10
+# Maximum percentage of hemoglobin reads
+p$max_hemo_percent <- 0
+
+## print and save parameters report
+report <- paste0(
+    "Gene Filtering\n",
+    "Minimum number of cells expressing gene:\t", p$min_cells, "\n",
+    "\nCell Filtering\n",
+    "Minimum number of gene expressed:\t", p$min_genes, "\n",
+    "Maximum number of genes expressed:\t", p$max_genes, "\n",
+    "Minimum number of counts:\t", p$min_counts, "\n",
+    "Maximum number of counts:\t", p$max_counts, "\n",
+    "Maximum percentage of mitochondrial reads:\t", p$max_mito_percent, "%\n",
+    "Maximum percentage of hemoglobin reads:\t", p$max_hemo_percent, "%")
+
+writeLines(report)
+writeLines(report, con = paste0(results_dir, "/02_filtering_parameters.txt"))
+```
+
+```{r Plot QC Features with Cutoffs Overlayed}
+plot_s_cg <- FeatureScatter(seurat, feature1 = "nCount_RNA", 
+                            feature2 = "nFeature_RNA") +
+  geom_vline(xintercept = c(p$min_counts, p$max_counts), color = "blue") +
+  geom_hline(yintercept = c(p$min_genes, p$max_genes), color = "blue") +
+  theme(legend.position = "none")
+print(plot_s_cg)
+plot_save_png(plot_s_cg,
+              plot_name = paste0("threshold",
+                                 "_scatter_count_gene"))
+plot_s_cm <- FeatureScatter(seurat, feature1 = "nCount_RNA", 
+                            feature2 = "percent_mt") +
+  geom_vline(xintercept = c(p$min_counts, p$max_counts), color = "blue") +
+  geom_hline(yintercept = c(p$max_mito_percent), color = "blue") +
+  theme(legend.position = "none")
+print(plot_s_cm)
+plot_save_png(plot_s_cm,
+              plot_name = paste0("threshold",
+                                 "_scatter_mito_count"))
+plot_s_gm <- FeatureScatter(seurat, feature1 = "nFeature_RNA", 
+                            feature2 = "percent_mt") +
+  geom_vline(xintercept = c(p$min_genes, p$max_genes), color = "blue") +
+  geom_hline(yintercept = c(p$max_mito_percent), color = "blue") +
+  theme(legend.position = "none")
+print(plot_s_gm)
+plot_save_png(plot_s_gm,
+              plot_name = paste0("threshold",
+                                 "_scatter_mito_gene"))
+
+plot_v_c <- qc_feature_vln(seurat = seurat, feature = "nCount_RNA",
+                           show.jitter = FALSE) +
+  geom_hline(yintercept = c(p$min_counts, p$max_counts), color = "blue")
+print(plot_v_c)
+plot_save_png(plot_v_c,
+              plot_name = paste0("threshold",
+                                 "_violin_count"))
+plot_v_c_w <- qc_feature_vln(seurat = seurat, feature = "nCount_RNA",
+                           show.jitter = FALSE, group.by = "10x_well") +
+  geom_hline(yintercept = c(p$min_counts, p$max_counts), color = "blue")
+print(plot_v_c_w)
+plot_save_png(plot_v_c_w,
+              plot_name = paste0("threshold",
+                                 "_violin_count_by-well"))
+
+plot_v_g <- qc_feature_vln(seurat = seurat, feature = "nFeature_RNA",
+                           show.jitter = FALSE) +
+  geom_hline(yintercept = c(p$min_genes, p$max_genes), color = "blue")
+print(plot_v_g)
+plot_save_png(plot_v_g,
+              plot_name = paste0("threshold",
+                                 "_violin_gene"))
+plot_v_g_w <- qc_feature_vln(seurat = seurat, feature = "nFeature_RNA",
+                           show.jitter = FALSE, group.by = "10x_well") +
+  geom_hline(yintercept = c(p$min_genes, p$max_genes), color = "blue")
+print(plot_v_g_w)
+plot_save_png(plot_v_g_w,
+              plot_name = paste0("threshold",
+                                 "_violin_gene_by-well"))
+
+plot_v_m <- qc_feature_vln(seurat = seurat, feature = "percent_mt",
+                           show.jitter = FALSE) +
+  geom_hline(yintercept =  p$max_mito_percent, color = "blue")
+print(plot_v_m)
+plot_save_png(plot_v_m,
+              plot_name = paste0("threshold",
+                                 "_violin_mito"))
+plot_v_m_w <- qc_feature_vln(seurat = seurat, feature = "percent_mt",
+                             show.jitter = FALSE, group.by = "10x_well") +
+  geom_hline(yintercept =  p$max_mito_percent, color = "blue")
+print(plot_v_m_w)
+plot_save_png(plot_v_m_w,
+              plot_name = paste0("threshold",
+                                 "_violin_mito_by-well"))
+```
+
+```{r Cell Counts at Each Step of Filtering}
+filter_dims <- list()
+filter_dims[["start"]] <- ncol(seurat)
+filter_dims[["start_sparsity"]] <- sparsity(seurat[["RNA"]]@counts)
+filter_dims[["min_genes"]] <- sum(seurat$nFeature_RNA >= p$min_genes)
+filter_dims[["min_counts"]] <- sum(seurat$nFeature_RNA >= p$min_genes &
+                                     seurat$nCount_RNA >= p$min_counts)
+filter_dims[["max_genes"]] <- sum(seurat$nFeature_RNA >= p$min_genes &
+                                    seurat$nCount_RNA >= p$min_counts &
+                                    seurat$nFeature_RNA < p$max_genes)
+filter_dims[["max_counts"]] <- sum(seurat$nFeature_RNA >= p$min_genes &
+                                     seurat$nCount_RNA >= p$min_counts &
+                                     seurat$nFeature_RNA < p$max_genes &
+                                     seurat$nCount_RNA < p$max_counts)
+filter_dims[["max_mito"]] <- sum(seurat$nFeature_RNA >= p$min_genes &
+                                   seurat$nCount_RNA >= p$min_counts &
+                                   seurat$nFeature_RNA < p$max_genes &
+                                   seurat$nCount_RNA < p$max_counts &
+                                   seurat$percent_mt <= p$max_mito_percent)
+ser_fil <- seurat[,seurat$nFeature_RNA >= p$min_genes &
+                    seurat$nCount_RNA >= p$min_counts &
+                    seurat$nFeature_RNA < p$max_genes &
+                    seurat$nCount_RNA < p$max_counts &
+                    seurat$percent_mt <= p$max_mito_percent &
+                    seurat$percent_hemo <= p$max_hemo_percent]
+filter_dims[["end"]] <- ncol(ser_fil)
+filter_dims[["end_sparsity"]] <- sparsity(ser_fil[["RNA"]]@counts)
+
+# table of cell counts for each well after filtering
+print("Cell Counts by well after filtering:")
+print(table(ser_fil$`10x_well`))
+
+# report of filtering outcome
+filter_report <- paste0(
+  "Gene Filtering\n",
+  "Minimum number of cells expressing gene:\t", p$min_cells, "\n",
+  "\tCell count:\t", filter_dims$start, "\n", 
+  "\tInitial sparsity:\t", filter_dims$start_sparsity, "%\n",
+  "\nCell Filtering\n",
+  "Minimum number of gene expressed:\t", p$min_genes, "\n",
+  "\tCell count:\t", filter_dims$min_genes, "\n",
+  "Minimum number of counts:\t", p$min_counts, "\n",
+  "\tCell count:\t", filter_dims$min_counts, "\n",
+  "Maximum number of genes expressed:\t", p$max_genes, "\n",
+  "\tCell count:\t", filter_dims$max_genes, "\n",
+  "Maximum number of counts:\t", p$max_counts, "\n",
+  "\tCell count:\t", filter_dims$max_counts, "\n",
+  "Maximum percentage of mitochondrial reads:\t", p$max_mito_percent, "%\n",
+  "\tCell count:\t", filter_dims$max_mito, "\n",
+  "Maximum percentage of hemoglobin reads:\t", p$max_hemo_percent, "%\n",
+  "\tCell count:\t", filter_dims$end, "\n",
+  "\tEnding sparsity:\t", filter_dims$end_sparsity, "%")
+
+writeLines(filter_report)
+writeLines(filter_report,
+           con = paste0(results_dir, "/02_filtering_cell_counts.txt"))
+```
+
+```{r QC Parameter Plots after Filtering}
+# plots of qc parameters after filtering
+for(qc in qc_features){
+  plot_j <- qc_feature_vln(ser_fil, feature = qc, show.jitter = TRUE)
+  plot_n <- qc_feature_vln(ser_fil, feature = qc, show.jitter = FALSE)
+  plot_g <- qc_feature_vln(ser_fil, feature = qc, show.jitter = FALSE, 
+                           group.by = "10x_well")
+  print(plot_j)
+  print(plot_g)
+  plot_save_png(plot_j,
+                plot_name = paste0("post_filter_", qc, "_violin_jitter"))
+  plot_save_png(plot_n,
+                plot_name = paste0("post_filter_", qc, "_violin"))
+  plot_save_png(plot_g,
+                plot_name = paste0("post_filter_", qc, "_violin_10x_well"))
+  
+  plot_scatter <- FeatureScatter(ser_fil, feature1 = "nCount_RNA",
+                                 feature2 = qc) +
+    theme(legend.position = "none")
+  print(plot_scatter)
+  plot_save_png(plot_scatter,
+                plot_name = paste0("post_filter_", qc, "_nCount_scatter"))
+  
+  plot_scatter <- FeatureScatter(ser_fil, feature1 = "nFeature_RNA",
+                                 feature2 = qc) +
+    theme(legend.position = "none")
+  print(plot_scatter)
+  plot_save_png(plot_scatter,
+                plot_name = paste0("post_filter_", qc, "_nFeature_scatter"))
+}
+
+# save rds of the subset seurat object
+saveRDS(ser_fil,
+        file = paste0(results_dir,
+                      "/02_qc_filtered_mouse_ici_scRNAseq.rds"))
+```

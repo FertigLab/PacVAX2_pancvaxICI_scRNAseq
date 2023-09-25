@@ -1,0 +1,117 @@
+---
+title: "05_UMAP_Embedding_and_Clustering"
+author: "Jacob Mitchell"
+date: '2022-07-29'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages}
+library(Seurat)
+library(ggplot2)
+
+set.seed(1)
+sessionInfo()
+```
+
+```{r Result and Plotting Directories}
+results_dir <- "processed_data/05_UMAP_Embedding_and_Clustering"
+if(!dir.exists(results_dir)){
+  dir.create(results_dir)
+}
+figure_dir <- "figures/05_UMAP_Embedding_and_Clustering"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r Custom Functions}
+# save plot as 6" x 6" png
+plot_save_png <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".png"),
+         width = 6, height = 6)
+}
+# save plot as 6" x 6" pdf
+plot_save_pdf <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".pdf"),
+         width = unit(6, "in"), height = unit(6, "in"))
+}
+```
+
+```{r Load Data}
+seurat <- readRDS("processed_data/04_Normalization_Scaling_PCA_and_Harmony_Batch_Correction/04_scaled_batch_correction_mouse_ici_scRNAseq.rds")
+```
+
+```{r Compute Nearest Neighbors}
+# compute nearest neighbors based on 25 PCs with harmony batch correction applied
+ElbowPlot(seurat, reduction = "harmony", ndims = 50) +
+  geom_vline(xintercept = 25.5, color = "red")
+
+seurat <- FindNeighbors(seurat, reduction = "harmony", dims = 1:25)
+```
+
+```{r Compute UMAP Embeddings}
+seurat <- RunUMAP(seurat, reduction = "harmony", dims = 1:25)
+```
+
+```{r Cluster cells at multiple resoltions}
+seurat <- FindClusters(seurat, resolution = 0.6)
+seurat <- FindClusters(seurat, resolution = 1.0)
+seurat <- FindClusters(seurat, resolution = 1.4)
+seurat <- FindClusters(seurat, resolution = 1.8)
+
+colnames(seurat@meta.data) <- gsub("^RNA_snn_res\\.", "Louvain_cluster_",
+                                   colnames(seurat@meta.data))
+```
+
+```{r Plot Clusters on UMAP Embedding}
+cluster_res <- colnames(seurat@meta.data)[grepl("^Louvain_cluster_", colnames(seurat@meta.data))]
+for(i in cluster_res){
+  p <- DimPlot(seurat, group.by = i)
+  p_nl <- p + theme(legend.position = "none")
+  print(p)
+  plot_save_png(p, plot_name = paste0("umap_", i))
+  plot_save_png(p_nl, plot_name = paste0("umap_", i, "_no_legend"))
+  plot_save_pdf(p, plot_name = paste0("umap_", i))
+  plot_save_pdf(p_nl, plot_name = paste0("umap_", i, "_no_legend"))
+}
+## Color cells by:
+plot_feat <- c("nCount_RNA", "nFeature_RNA", "percent_mt", "percent_ribo",
+               "S.Score", "G2M.Score")
+plot_id <- c("10x_well", "treatment", "batch", "has_ir", "Phase")
+
+for(feat in plot_feat){
+  p <- FeaturePlot(seurat, features = feat)
+  p_nl <- p + theme(legend.position = "none")
+  print(p)
+  plot_save_png(p, plot_name = paste0("umap_", feat))
+  plot_save_png(p_nl, plot_name = paste0("umap_", feat, "_no_legend"))
+  
+  p_vl <- VlnPlot(seurat, group.by = "Louvain_cluster_0.6", features = feat, pt.size = 0) +
+    xlab("cluster") + ylab(feat)
+  print(p_vl)
+  plot_save_png(p_vl, plot_name = paste0("vln_louvain_0.6_", feat))
+}
+for(id in plot_id){
+  p <- DimPlot(seurat, group.by = id)
+  p_nl <- p + theme(legend.position = "none")
+  print(p)
+  plot_save_png(p, plot_name = paste0("umap_", id))
+  plot_save_png(p_nl, plot_name = paste0("umap_", id, "_no_legend"))
+}
+```
+
+```{r Save Seurat Object}
+saveRDS(seurat,
+        file = paste0(results_dir, "/05_UMAP_Cluster_mouse_ici_scRNAseq.rds"))
+```
+

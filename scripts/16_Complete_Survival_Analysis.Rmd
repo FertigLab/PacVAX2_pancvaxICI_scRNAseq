@@ -1,0 +1,135 @@
+---
+title: "16_Complete_Survival_Analysis"
+author: "Jacob Mitchell"
+date: "2023-08-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages}
+library(plyr)
+library(tidyverse)
+library(survival)
+library(ggplot2)
+library(ggsurvfit)
+
+set.seed(123)
+sessionInfo()
+```
+
+```{r plotting palettes}
+treatment_pal <-
+  c(
+    "Isotype" = "#414141", 
+    "CTLA-4 + PD-1" = "#005685",
+    "PancVAX + Isotype" = "#FFD772",
+    "PancVAX + CTLA-4 + PD-1" = "#B14380"
+  )
+```
+
+```{r create directories}
+result_dir <- "processed_data/16_Complete_Survival_Analysis"
+if(!dir.exists(result_dir)){dir.create(result_dir)}
+figure_dir <- "figures/16_Complete_Survival_Analysis"
+if(!dir.exists(figure_dir)){dir.create(figure_dir)}
+```
+
+```{r load data}
+pancvax_surv <- read.csv("data/survival_experiments/20230828_complete/PancVAX + ICI survival tidy.csv")
+```
+
+```{r PancVAX + ICI Survival Analysis}
+# label treatment groups based on sample names
+pancvax_surv <- pancvax_surv %>%
+  mutate(treatment = gsub("_.*", "", id), 
+         replicate = gsub(".*_", "", id))
+pancvax_surv$treatment <- factor(
+  pancvax_surv$treatment, 
+  levels = c("Isotype", "CTLA-4 + PD-1", "PancVAX + Isotype", "PancVAX + CTLA-4 + PD-1")
+)
+
+# Kaplan-Meier estimate of survival curve (single event)
+# stype=1: direct estimation of the survival curve
+# ctype=1: Nelson-Aalen formula for cumulative hazard
+s_fit <- survfit2(Surv(day, died) ~ treatment, stype = 1, ctype = 1, data = pancvax_surv)
+summary(s_fit)
+
+surv_plot <- ggsurvfit(s_fit, size = 2.5) + 
+  scale_color_manual(values = treatment_pal) +
+  labs(x = "Days") +
+  scale_x_continuous(breaks = seq(0,90,5), limits = c(0, 90)) +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(legend.position = "bottom")
+
+
+# Mantel-Haenszel test for difference in survival across all treatment groups
+s_test_vax <- survdiff(Surv(day, died) ~ treatment, data = pancvax_surv)
+s_test_vax
+surv_plot
+
+ggsave(surv_plot,
+       file = paste0(figure_dir, "/Mantel-Haenszel_survival.pdf"),
+       width = unit(8, unit = "in"), height = unit(6, unit = "in"))
+
+## pairwise comparisons of survival by log-rank test
+pairwise_survival <- function(data, ref.group, test.group){
+  res <- data[data$treatment == ref.group | data$treatment == test.group,]
+  s_fit <- survfit2(Surv(day, died) ~ treatment, stype = 1, ctype = 1, data = res)
+  surv_plot <- ggsurvfit(s_fit, size = 2.5) + 
+    scale_color_manual(values = treatment_pal) +
+    labs(x = "Days") +
+    scale_x_continuous(breaks = seq(0,90,5), limits = c(0, 90)) +
+    ylim(0, 1) +
+    theme_classic() +
+    theme(legend.position = "bottom")
+  s_test <- survdiff(Surv(day, died) ~ treatment, data = res)
+  print(paste0("Log-rank test of survival: ", ref.group, " vs ", test.group))
+  print(s_test)
+  print(surv_plot)
+  return(
+    list(
+      "comparison" = paste0(ref.group, " vs ", test.group),
+      "chisq" = s_test[["chisq"]],
+      "pvalue" = s_test[["pvalue"]],
+      "plot" = surv_plot
+    )
+  )
+}
+
+treatments <- unique(pancvax_surv$treatment)
+
+pairwise_results <- NULL
+for(i in 1:length(treatments)){
+  ref.group <- treatments[i]
+  alt <- treatments[-1:-i]
+  for(a in alt){
+    test.group <- a
+    surv_res <- pairwise_survival(
+      data = pancvax_surv,
+      ref.group = ref.group,
+      test.group = test.group
+    )
+    comp <- surv_res$comparison
+    res <- c(
+      comp,
+      as.numeric(surv_res[["chisq"]]),
+      as.numeric(surv_res[["pvalue"]])
+    )
+    pairwise_results <- rbind(pairwise_results, res)
+    ggsave(surv_res$plot,
+           file = paste0(figure_dir, "/pairwise_", comp, "survival.pdf"),
+           width = unit(8, unit = "in"), height = unit(6, unit = "in"))
+  }
+}
+
+colnames(pairwise_results) <-
+  c("comparison", "chisq", "pvalue")
+print(pairwise_results)
+write.csv(pairwise_results,
+          file = paste0(result_dir, "/PancVAX+ICI_pairwise_survival_comparisons.csv"))
+```
+

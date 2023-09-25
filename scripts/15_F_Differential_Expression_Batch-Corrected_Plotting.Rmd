@@ -1,0 +1,157 @@
+---
+title: "15_F_Differential_Expression_Batch-Corrected_Plotting"
+author: "Jacob Mitchell"
+date: "2023-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(EnhancedVolcano)
+library(dplyr)
+library(scales)
+
+set.seed(123)
+sessionInfo()
+```
+
+```{r}
+result_dir <- "processed_data/15_F_Differential_Expression_Batch-Corrected_Plotting"
+if(!dir.exists(result_dir)){
+  dir.create(result_dir)
+}
+figure_dir <- "figures/15_F_Differential_Expression_Batch-Corrected_Plotting"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r}
+seurat <- readRDS(file = "processed_data/15_A_PancVAX2_Prelim_Analysis/seurat_untreated_PancVAX_PancVAXICI.rds")
+
+de_dir <- "./processed_data/15_E_Differential_Expression_Batch_control"
+de_results <- list.files(de_dir, pattern = ".csv$")
+
+fc_cutoff <- 0.5
+
+
+for(de in de_results){
+  de_name <- gsub("^MAST_test_LimitedFeatures_", "", de)
+  de_name <- gsub("\\.csv$", "", de_name)
+  
+  result <- read.csv(paste0(de_dir, "/", de), row.names = 1)
+  fc_scale_max <- round(-log10(min(result$p_val_adj)) + 5, -1)
+  
+  p_volcano <- EnhancedVolcano(result, x = "avg_log2FC", y = "p_val_adj", lab = rownames(result),
+                               pCutoff = 0.05, 
+                               # p-value cutoff lowered because the plotted value is FDR-adjusted p
+                               FCcutoff = fc_cutoff,
+                               legendDropLevels = FALSE, cutoffLineCol = "#00000020",
+                               gridlines.major = FALSE, gridlines.minor = FALSE,
+                               caption = "") +
+    labs(y = bquote(-log[10](FDR-adj~p))) +
+    theme(axis.title.y = element_text(size=12)) +
+    # scale_y_continuous(labels = label_number(accuracy = 0.1)) +
+    ggtitle(de_name)
+  
+  # print(p_volcano)
+  ggsave(plot = p_volcano,
+       filename = paste0(figure_dir, "/DE_volcano_", de_name, ".png"),
+       width = unit(6, "in"), height = unit(4, "in"))
+  ggsave(plot = p_volcano + theme(legend.position = "none") + 
+           labs(title = "", subtitle = "") + 
+           lims(x = c(-4,4), y = c(0, fc_scale_max)) +
+           scale_y_continuous(labels = label_number(accuracy = 0.1)),
+       filename = paste0(figure_dir, "/DE_volcano_", de_name, "_noLegend.png"),
+       width = unit(6, "in"), height = unit(4, "in"))
+  
+  # shortened tables of the significant genes from DE comparisons
+  de_sig <- result[abs(result$avg_log2FC) > fc_cutoff & result$p_val_adj < 0.05,]
+  de_sig <- de_sig %>% arrange(avg_log2FC)
+  
+  write.csv(de_sig, file = paste0(result_dir, "/signif_DE_", de_name, ".csv"))
+  
+  # count differentially expressed features
+  print(de_name)
+  print(
+    paste0("Differentially expressed features in group 1: ",
+           nrow(de_sig[de_sig$avg_log2FC > 0,]))
+  )
+  print(
+    paste0("Differentially expressed features in group 2: ",
+           nrow(de_sig[de_sig$avg_log2FC < 0,]))
+  )
+}
+```
+
+```{r specific DE plots with uniform limits to include in the figure}
+figure_de <- c(
+  "MAST_test_BatchCorrection_CD8_cells_IvP.csv",
+  "MAST_test_BatchCorrection_CD8_cells_PvU.csv",
+  "MAST_test_BatchCorrection_CD8_exhausted_IvP.csv",
+  "MAST_test_BatchCorrection_CD8_exhausted_PvU.csv",
+  "MAST_test_BatchCorrection_CD8_nonExhausted_IvP.csv",
+  "MAST_test_BatchCorrection_CD8_nonExhausted_PvU.csv",
+  "MAST_test_BatchCorrection_CD8_effector_IvP.csv",
+  "MAST_test_BatchCorrection_CD8_effector_PvU.csv",
+  "MAST_test_BatchCorrection_CD4_effector_IvP.csv",
+  "MAST_test_BatchCorrection_CD4_effector_PvU.csv"
+)
+
+for(de in figure_de){
+  de_name <- gsub("^MAST_test_LimitedFeatures_", "", de)
+  de_name <- gsub("\\.csv$", "", de_name)
+  result <- read.csv(paste0(de_dir, "/", de), row.names = 1)
+  fc_scale_max <- round(-log10(min(result$p_val_adj)) + 5, -1)
+  p_volcano <- EnhancedVolcano(result, x = "avg_log2FC", y = "p_val_adj", lab = rownames(result),
+                               pCutoff = 0.05, labSize = 3,
+                               FCcutoff = fc_cutoff, max.overlaps = 20,
+                               drawConnectors = TRUE,
+                               legendDropLevels = FALSE, cutoffLineCol = "#00000020",
+                               gridlines.major = FALSE, gridlines.minor = FALSE,
+                               caption = "") +
+    labs(y = bquote(-log[10](FDR-adj~p))) +
+    theme(axis.title.y = element_text(size=12)) +
+    ggtitle(de_name)
+  
+  if(de %in% c("MAST_test_BatchCorrection_CD4_effector_IvP.csv",
+               "MAST_test_BatchCorrection_CD4_effector_PvU.csv")){
+    fc_scale_max <- 10
+  }
+  # if(de %in% c("MAST_test_BatchCorrection_CD8_cells_PvU.csv")){
+  #   fc_scale_max <- 90
+  # }
+  ggsave(plot = p_volcano + theme(legend.position = "none") + 
+           labs(title = "", subtitle = "") + 
+           scale_y_continuous(labels = label_number(accuracy = 1),
+                              limits = c(0, fc_scale_max)) +
+           lims(x = c(-4,4))
+         ,
+       filename = paste0(figure_dir, "/Figure_DE_volcano_", de_name, "_noLegend.png"),
+       width = unit(4, "in"), height = unit(4, "in"))
+  # plot without axis labels
+  ggsave(plot = p_volcano + theme(legend.position = "none") + 
+           labs(title = "", subtitle = "", x = "", y = "") + 
+           scale_y_continuous(labels = label_number(accuracy = 1),
+                              limits = c(0, fc_scale_max)) +
+           lims(x = c(-4,4))
+         ,
+       filename = paste0(figure_dir, "/Figure_DE_volcano_", de_name, "_noLabels.png"),
+       width = unit(4, "in"), height = unit(4, "in"))
+  
+  ggsave(plot = p_volcano + theme(legend.position = "none") +
+           labs(title = "", subtitle = "") +
+           scale_y_continuous(labels = label_number(accuracy = 1),
+                              limits = c(0, fc_scale_max)) +
+           lims(x = c(-4,4))
+         ,
+       filename = paste0(figure_dir, "/Figure_DE_volcano_", de_name, "_noLegend.pdf"),
+       width = unit(4, "in"), height = unit(4, "in"))
+}
+
+```
+

@@ -1,0 +1,159 @@
+---
+title: "01_read_10x_merge_with_TCR"
+author: "Jacob Mitchell"
+date: '2022-07-19'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(plyr)
+library(dplyr)
+# library(data.table)
+library(reticulate)
+use_condaenv(condaenv = "pancvax_mouse")
+# reticulate is employed in this script to import functions from scirpy_0.10.1
+
+sessionInfo()
+```
+
+```{r}
+# expression counts matrix
+counts <- Read10X(data.dir = "data/filtered_feature_bc_matrix/")
+dim(counts)
+seurat <- CreateSeuratObject(counts = counts, project = "PancVax_ICI_mouse",
+                             min.cells = 3)
+dim(seurat)
+```
+
+```{r}
+# map well numbers to treatment group and isolation process
+
+# well labels saved from cell barcodes
+seurat@meta.data[["10x_well"]] <- sapply(rownames(seurat@meta.data),
+                                         function(x){
+                                           sub("^(.{1,17})", "", x)})
+# inital counts of cells in each well
+table(seurat@meta.data$`10x_well`)
+# 1:  7323
+# 2:  8836
+# 3:  8399
+# 4:  11830
+# 5:  8468
+# 6:  9898
+# 7:  8367
+# 8:  11673
+# 9:  7156
+# 10: 8970
+# 11: 11979
+# 12: 7356
+# 13: 11363
+# 14: 10069
+# 15: 7564
+# 16: 5743
+
+well <- factor(
+  x = c(1:16), levels = c(1:16)
+)
+group <- as.character(
+  c(1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8)
+)
+treatment <- c(
+  "PancVAX",                            # well 1
+  "PancVAX + Anti-PD-1 + Anti-CTLA-4",  # well 2
+  "PancVAX + Anti-PD-1",                # well 3
+  "PancVAX + Anti-CTLA-4",              # well 4
+  "Anti-PD-1 + Anti-CTLA-4",            # well 5
+  "Anti-CTLA-4",                        # well 6
+  "Anti-PD-1",                          # well 7
+  "Untreated",                          # well 8
+  "PancVAX",                            # well 9
+  "PancVAX + Anti-PD-1 + Anti-CTLA-4",  # well 10
+  "PancVAX + Anti-PD-1",                # well 11
+  "PancVAX + Anti-CTLA-4",              # well 12
+  "Anti-PD-1 + Anti-CTLA-4",            # well 13
+  "Anti-CTLA-4",                        # well 14
+  "Anti-PD-1",                          # well 15
+  "Untreated"                           # well 16
+)
+
+# tumor is whole dissociated tumor samples
+# immune is samples enriched for immune cells by percoll density seperation
+batch <- c(
+  "tumor",     # well 1
+  "tumor",     # well 2
+  "tumor",     # well 3
+  "tumor",     # well 4
+  "tumor",     # well 5
+  "tumor",     # well 6
+  "tumor",     # well 7
+  "tumor",     # well 8
+  "immune",    # well 9
+  "immune",    # well 10
+  "immune",    # well 11
+  "immune",    # well 12
+  "immune",    # well 13
+  "immune",    # well 14
+  "immune",    # well 15
+  "immune"     # well 16
+)
+
+well_df <- data.frame(well, group, treatment, batch)
+print(well_df)
+```
+
+```{r}
+# map values using the 10x well identifier on the seurat object
+seurat@meta.data$group <- plyr::mapvalues(
+  seurat@meta.data$`10x_well`,
+  well_df$well, well_df$group
+)
+seurat@meta.data$treatment <- plyr::mapvalues(
+  seurat@meta.data$`10x_well`,
+  well_df$well, well_df$treatment
+)
+seurat@meta.data$batch <- plyr::mapvalues(
+  seurat@meta.data$`10x_well`,
+  well_df$well, well_df$batch
+)
+
+# check that mapping occurred only for correct values
+table(seurat@meta.data$`10x_well`, seurat@meta.data$group)
+table(seurat@meta.data$`10x_well`, seurat@meta.data$treatment)
+table(seurat@meta.data$`10x_well`, seurat@meta.data$batch)
+```
+
+```{r}
+# using reticulate, read in the tcr information with scirpy so that it is
+# correctly formatted for downstream TCR analysis in python
+
+ir <- import(module = "scirpy", as = "ir")
+# read 10x vdj combined contig file
+tcr_ir <- ir$io$read_10x_vdj("data/combined_contigs.csv")
+# retreive the TCR annotations as a dataframe
+tcr <- as.data.frame(tcr_ir$obs)
+
+# incorporate the tcr information into the seurat object
+seurat <- AddMetaData(seurat, metadata = tcr)
+```
+
+```{r}
+# verify that tcr info was correctly incorpertated into the seurat meta data
+matched <- rownames(seurat@meta.data)[
+  rownames(seurat@meta.data) %in% rownames(tcr)
+]
+matched_df <- seurat@meta.data[matched,]
+
+dim(seurat)
+
+head(seurat@meta.data)
+head(matched_df)
+
+# save seurat object
+saveRDS(seurat, "data/01_aggr_merged_scRNA_TCR.rds", compress = "gzip")
+```
+

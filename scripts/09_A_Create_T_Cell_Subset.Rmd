@@ -1,0 +1,90 @@
+---
+title: "09_A_Create_T_Cell_Subset"
+author: "Jacob Mitchell"
+date: '2022-09-12'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages}
+library(Seurat)
+library(ggplot2)
+
+sessionInfo()
+```
+
+```{r Result and Plotting Directories}
+results_dir <- "processed_data/09_A_Create_T_Cell_Subset"
+if(!dir.exists(results_dir)){
+  dir.create(results_dir)
+}
+figure_dir <- "figures/09_A_Create_T_Cell_Subset"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r Custom Functions}
+# save plot as 6" x 6" png
+plot_save_png <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".png"),
+         width = 6, height = 6)
+}
+# save plot as 6" x 6" pdf
+plot_save_pdf <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".pdf"),
+         width = unit(6, "in"), height = unit(6, "in"))
+}
+```
+
+```{r Load Data}
+seurat <- readRDS("processed_data/05_UMAP_Embedding_and_Clustering/05_UMAP_Cluster_mouse_ici_scRNAseq.rds")
+```
+
+```{r Seurat features before subseting}
+dim(seurat)
+
+table(seurat$Louvain_cluster_0.6, seurat$batch)
+
+DimPlot(seurat, group.by = "Louvain_cluster_0.6", label = TRUE) +
+  theme(legend.position = "none")
+```
+
+```{r T Cell Clusters}
+# These clusters have been tentatively assigned T cell identities based on marker
+# gene expression and differential expression as compared to all other clusters.
+
+# The objective of this analysis is to further characterize the cell types represented
+# this group of cells in order to determine the proportional contribution of each
+# type in each treatment group and better understand functional characteristics of
+# T cell clones expanded by the treatments.
+
+t_cell_clusters <- c("3", "5", "9", "11", "13", "15", "25")
+
+ser_t <- seurat[,seurat$Louvain_cluster_0.6 %in% t_cell_clusters]
+```
+
+```{r}
+DimPlot(ser_t, group.by = "Louvain_cluster_0.6")
+
+table(ser_t$Louvain_cluster_0.6, ser_t$batch)
+
+# cell counts at high resolution clusters
+table(ser_t$Louvain_cluster_1)
+table(ser_t$Louvain_cluster_1.4)
+table(ser_t$Louvain_cluster_1.8)
+```
+
+```{r}
+saveRDS(ser_t, paste0(results_dir, "/09_A_T_cells_mouse_ici_scRNAseq.rds"))
+```
+

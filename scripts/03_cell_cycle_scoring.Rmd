@@ -1,0 +1,152 @@
+---
+title: "03_cell_cycle_scoring"
+author: "Jacob Mitchell"
+date: '2022-07-27'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages}
+library(Seurat)
+library(biomaRt)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+
+sessionInfo()
+```
+
+```{r Result and Plot Directories}
+results_dir <- "processed_data/03_cell_cycle_scoring"
+if(!dir.exists(results_dir)){
+  dir.create(results_dir)
+}
+figure_dir <- "figures/03_cell_cycle_scoring"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r Custom Functions}
+# save plot as 6" x 6" png
+plot_save_png <- function(plot, plot_name){
+  ggsave(plot = plot,
+         filename = paste0(figure_dir, "/",
+                           plot_name,
+                           ".png"),
+         width = 6, height = 6)
+}
+```
+
+```{r Load in Single Cell Data}
+seurat <- readRDS("processed_data/02_seurat_preprocessing_qc/02_qc_filtered_mouse_ici_scRNAseq.rds")
+```
+
+```{r Load in Cell Cycle Genes and Convert to Mouse Orthologs}
+# A list of cell cycle markers, from Tirosh et al, 2015
+# Kowalczyk MS, Tirosh I, Heckl D, Rao TN, Dixit A, Haas BJ, Schneider RK, Wagers AJ, Ebert BL, Regev A. Single-cell RNA-seq reveals changes in cell cycle and differentiation programs upon aging of hematopoietic stem cells. Genome Res. 2015 Dec;25(12):1860-72. doi: 10.1101/gr.192237.115. Epub 2015 Oct 1. PMID: 26430063; PMCID: PMC4665007.
+
+s_genes_human <- cc.genes.updated.2019$s.genes
+g2m_genes_human <- cc.genes.updated.2019$g2m.genes
+
+# format as dataframe
+cc_marker <- data.frame(cycle_stage = c(rep("S", length(s_genes_human)),
+                                        rep("G2M", length(g2m_genes_human))),
+                        human_gene = c(s_genes_human, g2m_genes_human))
+
+human_biomart <- useEnsembl("ensembl", dataset = "hsapiens_gene_ensembl", mirror = "useast",
+                            host = "dec2021.archive.ensembl.org")
+mouse_biomart <- useEnsembl("ensembl", dataset = "mmusculus_gene_ensembl", mirror = "useast",
+                            host = "dec2021.archive.ensembl.org")
+mouse_ortho <- getLDS(attributes = c("hgnc_symbol"), filters = "hgnc_symbol", 
+                      values = cc_marker$human_gene,
+                      mart = human_biomart,
+                      attributesL = c("mgi_symbol"), martL = mouse_biomart,
+                      uniqueRows=T)
+
+# genes whose orthologs were not automatically identified
+miss_ortho <- data.frame(
+  HGNC.symbol = cc_marker[!cc_marker$human_gene %in% mouse_ortho$HGNC.symbol,]$human_gene,
+  MGI.symbol = rep(NA, length(
+    cc_marker[!cc_marker$human_gene %in% mouse_ortho$HGNC.symbol,]$human_gene)))
+
+# orthologs manually checked using genecards
+# Accessed July 28, 2022
+
+# POLD3 -> Pold3
+# ATAD2 -> Atad2
+# TMPO -> Tmpo
+
+miss_ortho$MGI.symbol <- c("Pold3", "Atad2", "Tmpo")
+
+# append the missing orthologs and map the values to HGNC symbols
+mouse_ortho <- rbind(mouse_ortho, miss_ortho)
+
+cc_marker$mouse_gene <- plyr::mapvalues(x = cc_marker$human_gene,
+                                        from = mouse_ortho$HGNC.symbol,
+                                        to = mouse_ortho$MGI.symbol)
+
+s_genes_mouse <- cc_marker[cc_marker$cycle_stage == "S",]$mouse_gene
+g2m_genes_mouse <- cc_marker[cc_marker$cycle_stage == "G2M",]$mouse_gene
+
+# save table of cell cycle gene orthologs for record and to save others from this hassle
+write.csv(cc_marker,
+          file = paste0(figure_dir, "/cell_cycle_genes.csv"))
+```
+
+```{r Calculate Cell Cycle Scores}
+seurat <- CellCycleScoring(seurat,
+                           s.features = s_genes_mouse,
+                           g2m.features = g2m_genes_mouse,
+                           set.ident = FALSE)
+
+# convert Phase to a factor ordered as G1 -> S -> G2M
+seurat$Phase <- factor(seurat$Phase, levels = c("G1", "S", "G2M"))
+```
+
+```{r Plots of Computed Scores}
+# more in-depth investigation of these scores and phase assignments will take
+# place downstream in the analysis as cell types are assigned and other correlates
+# are investigated. These plots serve to assess quality of the computed scores.
+
+cell_meta_data <- seurat@meta.data
+
+p1 <- ggplot(cell_meta_data,
+            aes(x = .data[["S.Score"]], y = .data[["G2M.Score"]],
+                color = .data[["Phase"]])) +
+  geom_point() +
+  theme_minimal() +
+  ggtitle("Cell Cycle Phase")
+print(p1)
+plot_save_png(p1, 
+              plot_name = "cc_scatter_phase")
+p2 <- ggplot(cell_meta_data,
+            aes(x = .data[["S.Score"]], y = .data[["G2M.Score"]],
+                color = .data[["10x_well"]])) +
+  geom_point() +
+  theme_minimal() +
+  ggtitle("10x Chromium Well")
+print(p2)
+plot_save_png(p2, 
+              plot_name = "cc_scatter_well")
+
+# groupings to plot violin plots of cell cycle score metrics iteratively
+groups <- c("10x_well", "treatment", "batch", "has_ir", "Phase")
+for(g in groups){
+  p <- VlnPlot(seurat, features = c("S.Score", "G2M.Score"), group.by = g,
+               pt.size = 0) +
+    xlab(g)
+  print(p)
+  ggsave(filename = paste0(figure_dir, "/cc_violin_", g, ".png"),
+         plot = p,
+         width = 12, height = 6)
+}
+```
+
+```{r Save Seurat Object}
+saveRDS(seurat, file = paste0(results_dir, "/03_cell_cycle_score_mouse_ici_scRNAseq.rds"))
+```
+

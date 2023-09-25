@@ -1,0 +1,887 @@
+---
+title: "15_A_PancVAX2_Prelim_Analysis"
+author: "Jacob Mitchell"
+date: "2023-05-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load Packages}
+library(Seurat)
+library(harmony)
+library(tidyverse)
+library(dplyr)
+library(scatterHatch)
+library(ggplot2)
+library(scales)
+
+set.seed(123)
+sessionInfo()
+```
+
+```{r Create Directories}
+result_dir <- "processed_data/15_A_PancVAX2_Prelim_Analysis"
+if(!dir.exists(result_dir)){
+  dir.create(result_dir)
+}
+figure_dir <- "figures/15_A_PancVAX2_Prelim_Analysis"
+if(!dir.exists(figure_dir)){
+  dir.create(figure_dir)
+}
+```
+
+```{r Load Data}
+seurat <- readRDS("processed_data/10_Cell_Type_Labeling/10_cell_type_assigned_mouse_ici_scRNAseq.rds")
+```
+
+```{r Cell type color palette}
+cell_palette <- c(
+  "B" = "#007756", # B
+  "cancer" = "#56B4E9", # cancer
+  "cycling_CD8_T" = "#CC79A7", # cycling_CD8_T
+  "cytotoxic_CD8_T" = "#2CFFC6", # cytotoxic_CD8_T
+  "dendritic_cell" = "#06A5FF", # dendritic_cell
+  "effector_CD4_T" = "#FFBE2D", # effector_CD4_T
+  "endothelial" = "#999999", # endothelial
+  "exhausted_CD8_T" = "#D55E00", # exhausted_CD8_T
+  "monocyte" = "#E69F00", # monocyte
+  "myeloid_derived_supressor" = "#D99BBD", # myeloid_derived_supressor
+  "naive_CD8_T" = "#1C91D4", # naive_CD8_T
+  "natural_killer" = "#3D3D3D", # natural_killer
+  "regulatory_CD4_T" = "#AA9F0D", # regulatory_CD4_T
+  "tumor_associated_macrophage" = "#1674A9"  # tumor_associated_macrophage
+)
+
+cell_pattern_list <-
+  list(
+    list(pattern = "+", lineWidth = 0.2), # B
+    list(pattern = "x", angle = c(45,135), lineWidth = 0.2), # cancer
+    list(pattern = ""), # cycling_CD8_T
+    list(pattern = ""), # cytotoxic_CD8_T
+    list(pattern = "/", angle= c(135), lineWidth = 0.2), # dendritic_cell
+    list(pattern = ""), # effector_CD4_T
+    list(pattern = "-", lineWidth = 0.2), # endothelial
+    list(pattern = ""), # exhausted_CD8_T
+    list(pattern = "/", angle= c(45), lineWidth = 0.2), # monocyte
+    list(pattern = "|", lineWidth = 0.2), # myeloid_derived_supressor
+    list(pattern = ""), # naive_CD8_T
+    list(pattern = ""), # natural_killer
+    list(pattern = ""), # regulatory_CD4_T
+    list(pattern = "/", angle= c(45), lineWidth = 0.2) # tumor_associated_macrophage
+  )
+
+t_cell_palette <- cell_palette[grepl("CD[8|4]", names(cell_palette))]
+
+# treatment color palettes
+
+treatment_palette <- c(
+  "#414141", # Untreated
+  "#005685", # Anti-PD-1 + Anti-CTLA-4
+  "#FFD772", # PancVAX
+  "#B14380" # PancVAX + Anti-PD-1 + Anti-CTLA-4
+)
+
+treatment_pattern_list <-
+  list(
+    list(pattern = ""), # Untreated
+    list(pattern = ""), # Anti-PD-1 + Anti-CTLA-4
+    list(pattern = ""), # PancVAX
+    list(pattern = "") # PancVAX + Anti-PD-1 + Anti-CTLA-4
+  )
+```
+
+```{r Subset to Vaccine Treatment Groups}
+treatments <- c("Untreated", "Anti-PD-1 + Anti-CTLA-4", 
+                "PancVAX", "PancVAX + Anti-PD-1 + Anti-CTLA-4")
+pancvax <- seurat[,seurat$treatment %in% treatments]
+# clear the complete data set from memory
+rm(seurat)
+
+# order treatments
+pancvax$treatment <- factor(pancvax$treatment,
+                            levels = c(
+                              "Untreated",
+                              "Anti-PD-1 + Anti-CTLA-4",
+                              "PancVAX",
+                              "PancVAX + Anti-PD-1 + Anti-CTLA-4"
+                            ))
+
+# rescale and rerun low-dimensional embeddings
+
+# identify variable features in the subset data
+pancvax <- FindVariableFeatures(pancvax,
+                                selection.method = "vst", nfeatures = 2000)
+top10 <- head(VariableFeatures(pancvax), 10)
+plot_vf <- LabelPoints(plot = VariableFeaturePlot(pancvax),
+                       points = top10, repel = TRUE)
+print(plot_vf)
+ggsave(plot = plot_vf,
+       filename =  paste0(figure_dir, "/variable_features_scatterplot.png"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+
+# rescale expression data
+pancvax <- ScaleData(pancvax, vars.to.regress = c("S.Score", "G2M.Score"))
+
+# run PCA
+pancvax <- RunPCA(pancvax, features = VariableFeatures(pancvax))
+# harmony batch-corrected embedding
+pancvax <- RunHarmony(pancvax, group.by.vars = "batch", reduction = "pca",
+                      project.dim = FALSE)
+elbow_plot <- ElbowPlot(pancvax, ndims = 50)
+print(elbow_plot)
+
+# recompute UMAP
+pancvax <- FindNeighbors(pancvax, reduction = "harmony", dims = 1:25)
+pancvax <- RunUMAP(pancvax, reduction = "harmony", dims = 1:25)
+
+# save example plots of the new UMAP embedding
+umap_celltype <- DimPlot(pancvax, group.by = "cell_type")
+umap_treatment <- DimPlot(pancvax, group.by = "treatment") +
+  scale_color_manual(values = treatment_palette)
+ggsave(plot = umap_celltype,
+       file = paste0(figure_dir, "/umap_", "PancVAX_prelim", "_", "cell_type", 
+                     ".pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+ggsave(plot = umap_celltype + theme(legend.position = "none"),
+       file = paste0(figure_dir, "/umap_", "PancVAX_prelim", "_", "cell_type", 
+                     "_noLegend.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+
+ggsave(plot = umap_treatment,
+       file = paste0(figure_dir, "/umap_", "PancVAX_prelim", "_", "treatment", 
+                     ".pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+ggsave(plot = umap_treatment + theme(legend.position = "none"),
+       file = paste0(figure_dir, "/umap_", "PancVAX_prelim", "_", "treatment", 
+                     "_noLegend.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+
+# plot with overlayed treatment labels
+umap_celltype_label <- DimPlot(pancvax, group.by = "cell_type", label = TRUE) +
+  theme(legend.position = "none")
+ggsave(plot = umap_celltype_label,
+       file = paste0(figure_dir, "/umap_", "PancVAX_prelim", "_", "cell_type", 
+                     "_labeled.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+
+# save rds file of subset cells for PancVAX treatment
+saveRDS(pancvax, file = paste0(result_dir, "/seurat_untreated_PancVAX_PancVAXICI.rds"))
+```
+
+```{r exploration of differential expression result}
+mast.test <- function(seurat, group.by, ident.1, ident.2, filename){
+  de <- FindMarkers(object = seurat,
+                    test.use = "MAST",
+                    group.by = group.by,
+                    ident.1 = ident.1, ident.2 = ident.2)
+  write.csv(x = de, file = filename)
+  return(de)
+}
+
+# create subsets of cells for differential expression test
+cell_groupings <- list(
+  "CD8_cells" = c("cycling_CD8_T", "cytotoxic_CD8_T", "exhausted_CD8_T", "naive_CD8_T"),
+  "CD8_cytotoxic" = c("cytotoxic_CD8_T"),
+  "CD8_cycling" = c("cycling_CD8_T"),
+  "CD8_naive" = c("naive_CD8_T"),
+  "CD8_exhausted" = c("exhausted_CD8_T"),
+  "CD4_cells" = c("effector_CD4_T", "regulatory_CD4_T"),
+  "CD4_effector" = c("effector_CD4_T"),
+  "CD4_Treg" = c("regulatory_CD4_T"),
+  "Myeloid" = c("dendritic_cell", "monocyte", "myeloid_derived_supressor", "tumor_associated_macrophage"),
+  "Monocyte+TAM" = c("monocyte", "tumor_associated_macrophage"),
+  "Monocyte" = c("monocyte"),
+  "TAM" = c("tumor_associated_macrophage"),
+  "Dendritic_cell" = c("dendritic_cell"),
+  "MDSC" = c("myeloid_derived_supressor"),
+  "B_cell" = c("B")
+)
+
+# list to store subset seurat objects
+cell_seurat_list <- list()
+
+# list to store DE results
+cell_de_list <- list()
+
+for(cell in names(cell_groupings)){
+  print(cell)
+  ser <- pancvax[, pancvax$cell_type %in% cell_groupings[[cell]] ]
+  cell_seurat_list[[cell]] <- ser
+  
+  # test untreated vs PancVAX
+  testname_PvU <- paste0(cell, "_PvU")
+  de_PvU <- mast.test(seurat = ser, group.by = "treatment",
+                      ident.1 = "PancVAX", ident.2 = "Untreated", 
+                      filename = paste0(result_dir, "/MAST_test_LimitedFeatures_", testname_PvU, ".csv"))
+  cell_de_list[[testname_PvU]] <- de_PvU
+  
+  # test PancVAX vs PancVAX + ICI
+  testname_IvP <- paste0(cell, "_IvP")
+  de_IvP <- mast.test(seurat = ser, group.by = "treatment",
+                      ident.1 = "PancVAX + Anti-PD-1 + Anti-CTLA-4", ident.2 = "PancVAX", 
+                      filename = paste0(result_dir, "/MAST_test_LimitedFeatures_", testname_IvP, ".csv"))
+  cell_de_list[[testname_IvP]] <- de_IvP
+}
+
+# heatmaps of DE genes
+adj_pval_threshold <- 0.05
+lfc_threshold <- 0.5
+
+for(cell in names(cell_groupings)){
+  # untreated vs PancVAX
+  testname_PvU <- paste0(cell, "_PvU")
+  de_PvU <- cell_de_list[[testname_PvU]]
+  de_PvU <- de_PvU[de_PvU$p_val_adj < adj_pval_threshold &
+                     abs(de_PvU$avg_log2FC) > lfc_threshold,]
+  if(nrow(de_PvU) < 1){
+    print(paste0(testname_PvU, ": No significant features"))
+  } else {
+    # list features
+    de_features <- de_PvU %>% arrange(avg_log2FC) %>% rownames()
+    # scale expression for heatmap plotting
+    ser <- cell_seurat_list[[cell]]
+    ser <- ScaleData(ser, features = de_features)
+    
+    hmap_PvU <- DoHeatmap(object = ser,
+                      group.by = "treatment",
+                      features = de_features) +
+      scale_fill_gradientn(colors = c("#56B4E9", "#000000", "#D55E00")) +
+      ggtitle(testname_PvU)
+    ggsave(plot = hmap_PvU,
+           filename = paste0(figure_dir, "/heatmap_DifferentialFeatures_", testname_PvU, ".png"),
+           width = unit(10, "in"), height = unit(8, "in"), dpi = 300)
+  }
+  
+  # PancVAX vs PancVAX + ICI
+  testname_IvP <- paste0(cell, "_IvP")
+  de_IvP <- cell_de_list[[testname_IvP]]
+  de_IvP <- de_IvP[de_IvP$p_val_adj < adj_pval_threshold &
+                     abs(de_IvP$avg_log2FC) > lfc_threshold,]
+  if(nrow(de_IvP) < 1){
+    print(paste0(testname_IvP, ": No significant features"))
+  } else {
+    # list features
+    de_features <- de_IvP %>% arrange(avg_log2FC) %>% rownames()
+    # scale expression for heatmap plotting
+    ser <- cell_seurat_list[[cell]]
+    ser <- ScaleData(ser, features = de_features)
+    
+    hmap_IvP <- DoHeatmap(object = ser,
+                      group.by = "treatment",
+                      features = de_features) +
+      scale_fill_gradientn(colors = c("#56B4E9", "#000000", "#D55E00")) +
+      ggtitle(testname_IvP)
+    ggsave(plot = hmap_IvP,
+           filename = paste0(figure_dir, "/heatmap_DifferentialFeatures_", testname_IvP, ".png"),
+           width = unit(10, "in"), height = unit(8, "in"), dpi = 300)
+  }
+}
+
+# individual feature plots
+feature_dir <- paste0(figure_dir, "/feature_plots")
+if(!dir.exists(feature_dir)){
+  dir.create(feature_dir)
+}
+
+features <- c(
+  "Cd3g", "Cd8a", "Cd4", "Sell",
+  "Gzmb", "Ccl5", "Pdcd1", "Lag3",
+  "Mki67", "Il17a", "Foxp3",
+  "Nkg7", "Xcl1", "Cd19",
+  "Fcgr3", "Adgre1", "H2-Ab1",
+  "Itgae", "H2-Oa",
+  "S100a9", "Sox9", "Krt8", "Cd34"
+)
+# expression scale for uniform spatial plots
+expr_scale <- c(0,
+                max(pancvax@assays$RNA@data[features,]))
+
+for(f in features){
+  umap_p <- FeaturePlot(pancvax, features = f) +
+    scale_color_gradientn(colors = c("#EEEEEE", "#FF0000", "#AA0000"),
+                          limits = expr_scale, name = "Expression")
+  # vln_p <- VlnPlot(pancvax, features = f, group.by = "treatment") +
+  #   theme(axis.title.x=element_blank(), axis.text.x=element_blank())
+  # 
+  # print(umap_p)
+  # print(vln_p)
+  ggsave(plot = umap_p,
+         filename = paste0(feature_dir, "/umap_", f, ".png"),
+         width = unit(4, "in"), height = unit(4, "in"), dpi = 300)
+  # save without axes for multipanel figure
+  ggsave(plot = umap_p +
+           theme(axis.line=element_blank(),
+                 axis.text.x=element_blank(),
+                 axis.text.y=element_blank(),
+                 axis.ticks=element_blank(),
+                 axis.title.x=element_blank(),
+                 axis.title.y=element_blank(),
+                 legend.position="none"),
+         filename = paste0(feature_dir, "/umap_", f, "_noAxes.png"),
+         width = unit(2, "in"), height = unit(3, "in"), dpi = 300)
+}
+
+# Scatter Hatch cell_type and treatment plots
+ser_meta <- pancvax@meta.data
+ser_meta$cellID <- paste0('cell_', 1:nrow(ser_meta))
+
+ser_meta$Xt <- pancvax@reductions$umap@cell.embeddings[,1]
+ser_meta$Yt <- pancvax@reductions$umap@cell.embeddings[,2]
+
+sh_cell_type <- scatterHatch(
+  data = ser_meta, x = "Xt", y = "Yt", color_by = "cell_type",
+  legendTitle = "Cell Type", colorPalette = cell_palette,
+  patternList = cell_pattern_list)
+ggsave(plot = sh_cell_type,
+       filename = paste0(figure_dir, "/scatterHatch_", "cell_type", ".png"),
+       width = unit(8, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = sh_cell_type,
+       filename = paste0(figure_dir, "/scatterHatch_", "cell_type", ".pdf"),
+       width = unit(8, "in"), height = unit(8, "in"), dpi = 300)
+# save without axes for multipanel figure
+ggsave(plot = sh_cell_type +
+         theme(axis.line=element_blank(),
+               axis.text.x=element_blank(),
+               axis.text.y=element_blank(),
+               axis.ticks=element_blank(),
+               axis.title.x=element_blank(),
+               axis.title.y=element_blank(),
+               legend.position="none"),
+       filename = paste0(figure_dir, "/scatterHatch_", "cell_type", "_noAxes.png"),
+       width = unit(8, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = sh_cell_type +
+         theme(axis.line=element_blank(),
+               axis.text.x=element_blank(),
+               axis.text.y=element_blank(),
+               axis.ticks=element_blank(),
+               axis.title.x=element_blank(),
+               axis.title.y=element_blank(),
+               legend.position="none"),
+       filename = paste0(figure_dir, "/scatterHatch_", "cell_type", "_noAxes.pdf"),
+       width = unit(8, "in"), height = unit(8, "in"), dpi = 300)
+
+# shortened treatment names
+treatment_names <- c("PBS", "ICI", "PancVAX", "PancVAX + ICI")
+
+sh_treatment <- scatterHatch(
+  data = ser_meta, x = "Xt", y = "Yt", color_by = "treatment",
+  legendTitle = "Treatment", colorPalette = treatment_palette,
+  patternList = treatment_pattern_list)
+ggsave(plot = sh_treatment,
+       filename = paste0(figure_dir, "/scatterHatch_", "treatment", ".png"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+ggsave(plot = sh_treatment,
+       filename = paste0(figure_dir, "/scatterHatch_", "treatment", ".pdf"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+# save without axes for multipanel figure
+ggsave(plot = sh_treatment +
+         theme(axis.line=element_blank(),
+               axis.text.x=element_blank(),
+               axis.text.y=element_blank(),
+               axis.ticks=element_blank(),
+               axis.title.x=element_blank(),
+               axis.title.y=element_blank(),
+               legend.position="none"),
+       filename = paste0(figure_dir, "/scatterHatch_", "treatment", "_noAxes.png"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+ggsave(plot = sh_treatment +
+         theme(axis.line=element_blank(),
+               axis.text.x=element_blank(),
+               axis.text.y=element_blank(),
+               axis.ticks=element_blank(),
+               axis.title.x=element_blank(),
+               axis.title.y=element_blank(),
+               legend.position="none"),
+       filename = paste0(figure_dir, "/scatterHatch_", "treatment", "_noAxes.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+
+
+for(i in 1:length(levels(pancvax$treatment))){
+  t <- levels(pancvax$treatment)[i]
+  umap_t <- DimPlot(pancvax[,pancvax$treatment == t], group.by = "treatment") +
+    scale_color_manual(values = treatment_palette[i]) +
+    ggtitle(treatment_names[i])
+  # print(umap_t)
+  
+  ggsave(plot = umap_t,
+         filename = paste0(figure_dir, "/umap_", t, ".png"),
+         width = unit(4, "in"), height = unit(4, "in"), dpi = 300)
+  ggsave(plot = umap_t,
+         filename = paste0(figure_dir, "/umap_", t, ".pdf"),
+         width = unit(4, "in"), height = unit(4, "in"), dpi = 300)
+  # save without axes for multipanel figure
+  ggsave(plot = umap_t +
+           theme(axis.line=element_blank(),
+                 axis.text.x=element_blank(),
+                 axis.text.y=element_blank(),
+                 axis.ticks=element_blank(),
+                 axis.title.x=element_blank(),
+                 axis.title.y=element_blank(),
+                 legend.position="none"),
+         filename = paste0(figure_dir, "/umap_", t, "_noAxes.png"),
+         width = unit(3, "in"), height = unit(3, "in"), dpi = 300)
+  ggsave(plot = umap_t +
+           theme(axis.line=element_blank(),
+                 axis.text.x=element_blank(),
+                 axis.text.y=element_blank(),
+                 axis.ticks=element_blank(),
+                 axis.title.x=element_blank(),
+                 axis.title.y=element_blank(),
+                 legend.position="none"),
+         filename = paste0(figure_dir, "/umap_", t, "_noAxes.pdf"),
+         width = unit(3, "in"), height = unit(3, "in"), dpi = 300)
+}
+```
+
+```{r Cell composition comparisons}
+# overall cell counts within cell types
+table(pancvax$treatment, pancvax$cell_type)
+
+# stacked barplots
+stack_cell_porportions <- function(seurat, group.by.x, group.by.stack){
+  cell_meta_data <- seurat@meta.data
+  # x axis labels
+  x.group <- unique(cell_meta_data[[group.by.x]])
+  # groups in stacks
+  stack.group <- unique(cell_meta_data[[group.by.stack]])
+  
+  prop <- data.frame(x.group = x.group)
+  
+  # count cells in x groups
+  prop[["total_count"]] <- sapply(
+    x.group, 
+    function(x){
+      nrow(cell_meta_data[cell_meta_data[[group.by.x ]] == x,]
+           )
+    }
+  )
+  for(type in stack.group){
+    prop[[paste0(type, "_count")]] <- sapply(
+      x.group, 
+      function(x){
+        nrow(cell_meta_data[cell_meta_data[[group.by.x]] == x &
+                              cell_meta_data[[group.by.stack]] == type,]
+             )
+      }
+    )
+  }
+  # convert counts to a proportion
+  cluster_counts <- colnames(prop)[-1:-2]
+  for(i in cluster_counts){
+    proportion <- gsub("_count$", "_proportion", i)
+    prop[[proportion]] <- prop[[i]]/prop[["total_count"]]
+  }
+  # reorient to long data frame
+  columns <- colnames(prop)[grep("proportion$", colnames(prop))]
+  prop_stacked <- pivot_longer(prop, cols = columns,
+                               names_to = group.by.stack,
+                               values_to = "proportion")
+  prop_stacked[[group.by.stack]] <- gsub("_proportion$", "", prop_stacked[[group.by.stack]])
+  return(prop_stacked)
+}
+  
+plot_stack <- function(prop_stacked, group.by.x, group.by.stack, title = "",
+                       fill.palette = NULL){ 
+  if(is.null(fill.palette)){
+    stack.group <- unique(prop_stacked[[group.by.stack]])
+    fill.palette <- scales::hue_pal()(length(stack.group))
+    names(fill.palette) <- stack.group
+  }
+  stack_plot <-
+    ggplot(prop_stacked, 
+           aes(x = x.group, 
+               y = proportion, 
+               fill = .data[[group.by.stack]])) +
+    geom_bar(position = "stack", stat = "identity", color = "#000000", linewidth = 0.2) +
+    scale_fill_manual(values = fill.palette) +
+    ylab("Cell proportion") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 20, vjust = 1, hjust=1),
+          axis.title.x = element_blank(),
+          axis.title.y = element_text(size = 16),
+          title = element_text(size = 20)) +
+    ggtitle(title)
+  return(stack_plot)
+}
+
+pancvax_stack <- stack_cell_porportions(seurat = pancvax,
+                                        group.by.x = "treatment", 
+                                        group.by.stack = "cell_type")
+pancvax_stack$x.group <- factor(pancvax_stack$x.group,
+                                levels = c("Untreated",
+                                           "Anti-PD-1 + Anti-CTLA-4",
+                                           "PancVAX",
+                                           "PancVAX + Anti-PD-1 + Anti-CTLA-4"))
+p_stack <- plot_stack(prop_stacked = pancvax_stack, 
+                      group.by.x = "treatment", group.by.stack = "cell_type",
+                      fill.palette = cell_palette)
+ggsave(plot = p_stack,
+       filename = paste0(figure_dir, "/stacked_allCells.png"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+ggsave(plot = p_stack,
+       filename = paste0(figure_dir, "/stacked_allCells.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+ggsave(plot = p_stack + theme(legend.position = "none"),
+       filename = paste0(figure_dir, "/stacked_allCells_noLegend.png"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+ggsave(plot = p_stack + theme(legend.position = "none"),
+       filename = paste0(figure_dir, "/stacked_allCells_noLegend.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+
+# subset to T cell types
+pancvax_t <- pancvax[,pancvax$cell_type %in% cell_groupings$CD8_cells |
+                       pancvax$cell_type %in% cell_groupings$CD4_cells]
+
+pancvax_t_stack <- stack_cell_porportions(seurat = pancvax_t,
+                                        group.by.x = "treatment", 
+                                        group.by.stack = "cell_type")
+pancvax_t_stack$x.group <- factor(pancvax_t_stack$x.group,
+                                  levels = c("Untreated",
+                                             "Anti-PD-1 + Anti-CTLA-4",
+                                             "PancVAX",
+                                             "PancVAX + Anti-PD-1 + Anti-CTLA-4"))
+p_t_stack <- plot_stack(prop_stacked = pancvax_t_stack, 
+                        group.by.x = "treatment", group.by.stack = "cell_type",
+                        title = "T Cell Composition",
+                        fill.palette = cell_palette)
+ggsave(plot = p_t_stack,
+       filename = paste0(figure_dir, "/stacked_Tcells.png"),
+       width = unit(5, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_stack,
+       filename = paste0(figure_dir, "/stacked_Tcells.pdf"),
+       width = unit(5, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_stack + theme(legend.position = "none"),
+       filename = paste0(figure_dir, "/stacked_Tcells_noLegend.png"),
+       width = unit(4, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_stack + theme(legend.position = "none"),
+       filename = paste0(figure_dir, "/stacked_Tcells_noLegend.pdf"),
+       width = unit(4, "in"), height = unit(8, "in"), dpi = 300)
+
+# Adjust treatment names to match previous formating
+treatment_dict <- data.frame(
+  "from" = c("Untreated", "Anti-PD-1 + Anti-CTLA-4", "PancVAX", "PancVAX + Anti-PD-1 + Anti-CTLA-4"),
+  "to" = c("Isotype", "PD-1 + CTLA-4", "PancVAX + Isotype", "PancVAX + PD-1 + CTLA-4")
+)
+pancvax_t_stack_relabel <- pancvax_t_stack
+pancvax_t_stack_relabel$x.group <- plyr::mapvalues(
+  x = pancvax_t_stack_relabel$x.group,
+  from = treatment_dict$from,
+  to = treatment_dict$to
+)
+p_t_stack_relabel <- plot_stack(prop_stacked = pancvax_t_stack_relabel, 
+                                group.by.x = "treatment", group.by.stack = "cell_type",
+                                title = "T Cell Composition",
+                                fill.palette = cell_palette)
+ggsave(plot = p_t_stack_relabel,
+       filename = paste0(figure_dir, "/stacked_Tcells_relabel.png"),
+       width = unit(5, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_stack_relabel,
+       filename = paste0(figure_dir, "/stacked_Tcells_relabel.pdf"),
+       width = unit(5, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_stack_relabel + theme(legend.position = "none"),
+       filename = paste0(figure_dir, "/stacked_Tcells_relabel_noLegend.png"),
+       width = unit(4, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_stack_relabel + theme(legend.position = "none"),
+       filename = paste0(figure_dir, "/stacked_Tcells_relabel_noLegend.pdf"),
+       width = unit(4, "in"), height = unit(8, "in"), dpi = 300)
+
+
+# save data frames of cell counts and proportions
+write.csv(pancvax_stack, 
+          file = paste0(result_dir, "/stacked_proportions_allCells.csv"))
+write.csv(pancvax_t_stack, 
+          file = paste0(result_dir, "/stacked_proportions_Tcells.csv"))
+```
+
+```{r UMAP plots of just T cells for figure plot}
+# identify variable features in the subset data
+pancvax_t <- FindVariableFeatures(pancvax_t,
+                                selection.method = "vst", nfeatures = 2000)
+
+# rescale expression data
+pancvax_t <- ScaleData(pancvax_t, vars.to.regress = c("S.Score", "G2M.Score"))
+# run PCA
+pancvax_t <- RunPCA(pancvax_t, features = VariableFeatures(pancvax_t))
+# harmony batch-corrected embedding
+pancvax_t <- RunHarmony(pancvax_t, group.by.vars = "batch", reduction = "pca",
+                        project.dim = FALSE)
+
+# recompute UMAP
+pancvax_t <- FindNeighbors(pancvax_t, reduction = "harmony", dims = 1:25)
+pancvax_t <- RunUMAP(pancvax_t, reduction = "harmony", dims = 1:25)
+
+# save example plots of the new UMAP embedding
+umap_celltype <- DimPlot(pancvax_t, group.by = "cell_type") +
+  scale_color_manual(values = cell_palette)
+umap_treatment <- DimPlot(pancvax_t, group.by = "treatment") +
+  scale_color_manual(values = treatment_palette)
+ggsave(plot = umap_celltype,
+       file = paste0(figure_dir, "/umap_Tcell_", "PancVAX_prelim", "_", "cell_type", 
+                     ".pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+ggsave(plot = umap_celltype + 
+         theme(legend.position = "none"),
+       file = paste0(figure_dir, "/umap_Tcell_", "PancVAX_prelim", "_", "cell_type", 
+                     "_noLegend.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+ggsave(plot = umap_celltype + 
+         theme(axis.line=element_blank(),
+               axis.text.x=element_blank(),
+               axis.text.y=element_blank(),
+               axis.ticks=element_blank(),
+               axis.title.x=element_blank(),
+               axis.title.y=element_blank(),
+               legend.position="none") +
+         ggtitle(""),
+       file = paste0(figure_dir, "/umap_Tcell_", "PancVAX_prelim", "_", "cell_type", 
+                     "_noLabels.pdf"),
+       width = unit(5, "in"), height = unit(5, "in"))
+ggsave(plot = umap_celltype + 
+         theme(axis.line=element_blank(),
+               axis.text.x=element_blank(),
+               axis.text.y=element_blank(),
+               axis.ticks=element_blank(),
+               axis.title.x=element_blank(),
+               axis.title.y=element_blank(),
+               legend.position="none") +
+         ggtitle(""),
+       file = paste0(figure_dir, "/umap_Tcell_", "PancVAX_prelim", "_", "cell_type", 
+                     "_noLabels.png"),
+       width = unit(5, "in"), height = unit(5, "in"))
+
+ggsave(plot = umap_treatment,
+       file = paste0(figure_dir, "/umap_Tcell_", "PancVAX_prelim", "_", "treatment", 
+                     ".pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+ggsave(plot = umap_treatment + theme(legend.position = "none"),
+       file = paste0(figure_dir, "/umap_Tcell_", "PancVAX_prelim", "_", "treatment", 
+                     "_noLegend.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"))
+
+
+# Scatter Hatch cell_type and treatment plots
+ser_meta <- pancvax_t@meta.data
+ser_meta$cellID <- paste0('cell_', 1:nrow(ser_meta))
+
+ser_meta$Xt <- pancvax_t@reductions$umap@cell.embeddings[,1]
+ser_meta$Yt <- pancvax_t@reductions$umap@cell.embeddings[,2]
+
+sh_cell_type <- scatterHatch(
+  data = ser_meta, x = "Xt", y = "Yt", color_by = "cell_type",
+  legendTitle = "Cell Type", colorPalette = cell_palette,
+  patternList = cell_pattern_list)
+ggsave(plot = sh_cell_type,
+       filename = paste0(figure_dir, "/scatterHatch_Tcell_", "cell_type", ".png"),
+       width = unit(8, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = sh_cell_type,
+       filename = paste0(figure_dir, "/scatterHatch_Tcell_", "cell_type", ".pdf"),
+       width = unit(8, "in"), height = unit(8, "in"), dpi = 300)
+# save without axes for multipanel figure
+ggsave(plot = sh_cell_type +
+         theme(axis.line=element_blank(),
+               axis.text.x=element_blank(),
+               axis.text.y=element_blank(),
+               axis.ticks=element_blank(),
+               axis.title.x=element_blank(),
+               axis.title.y=element_blank(),
+               legend.position="none"),
+       filename = paste0(figure_dir, "/scatterHatch_Tcell_", "cell_type", "_noAxes.png"),
+       width = unit(8, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = sh_cell_type +
+         theme(axis.line=element_blank(),
+               axis.text.x=element_blank(),
+               axis.text.y=element_blank(),
+               axis.ticks=element_blank(),
+               axis.title.x=element_blank(),
+               axis.title.y=element_blank(),
+               legend.position="none"),
+       filename = paste0(figure_dir, "/scatterHatch_Tcell_", "cell_type", "_noAxes.pdf"),
+       width = unit(8, "in"), height = unit(8, "in"), dpi = 300)
+
+# individual treament plots
+for(i in 1:length(levels(pancvax_t$treatment))){
+  t <- levels(pancvax_t$treatment)[i]
+  umap_t <- DimPlot(pancvax_t[,pancvax_t$treatment == t], group.by = "treatment") +
+    scale_color_manual(values = treatment_palette[i]) +
+    ggtitle(treatment_names[i])
+  # print(umap_t)
+  
+  ggsave(plot = umap_t,
+         filename = paste0(figure_dir, "/umap_Tcells_", t, ".png"),
+         width = unit(4, "in"), height = unit(4, "in"), dpi = 300)
+  ggsave(plot = umap_t,
+         filename = paste0(figure_dir, "/umap_Tcells_", t, ".pdf"),
+         width = unit(4, "in"), height = unit(4, "in"), dpi = 300)
+  # save without axes for multipanel figure
+  ggsave(plot = umap_t +
+           theme(axis.line=element_blank(),
+                 axis.text.x=element_blank(),
+                 axis.text.y=element_blank(),
+                 axis.ticks=element_blank(),
+                 axis.title.x=element_blank(),
+                 axis.title.y=element_blank(),
+                 legend.position="none") +
+           ggtitle(""),
+         filename = paste0(figure_dir, "/umap_Tcells_", t, "_noAxes.png"),
+         width = unit(3, "in"), height = unit(3, "in"), dpi = 300)
+  ggsave(plot = umap_t +
+           theme(axis.line=element_blank(),
+                 axis.text.x=element_blank(),
+                 axis.text.y=element_blank(),
+                 axis.ticks=element_blank(),
+                 axis.title.x=element_blank(),
+                 axis.title.y=element_blank(),
+                 legend.position="none") +
+           ggtitle(""),
+         filename = paste0(figure_dir, "/umap_Tcells_", t, "_noAxes.pdf"),
+         width = unit(3, "in"), height = unit(3, "in"), dpi = 300)
+}
+
+# counts of cell types
+table(pancvax_t$treatment, pancvax_t$cell_type)
+
+# save the T cell subset seurat object
+saveRDS(pancvax_t, file = paste0(result_dir, "/seurat_Tcell_untreated_PancVAX_PancVAXICI.rds"))
+```
+
+```{r supplementary figure plots}
+sup_figure_dir <- paste0(figure_dir, "/supplement")
+if(!dir.exists(sup_figure_dir)){
+  dir.create(sup_figure_dir)
+}
+
+# annotation marker genes
+markers <- list(
+  "immune" = c("Ptprc"),
+  "T cell" = c("Cd3g", "Cd8a", "Cd4"),
+  "naive_CD8_T" = c("Sell", "Ccr7"),
+  "effector_CD8_T" = c("Gzmb", "Ccl5", "Ly6a"),
+  "exhausted_CD8_T" = c("Pdcd1", "Lag3", "Tigit"),
+  "cycling_CD8_T" = c("Mki67", "Top2a"),
+  "effector_CD4_T" = c("Il17a", "Tnfrsf4"),
+  "regulatory_CD4_T" = c("Foxp3", "Ctla4"),
+  "natural_killer" = c("Xcl1", "Prf1"),
+  "B" = c("Cd19", "Ms4a1"),
+  "tumor_associated_macrophage" = c("Fcgr3", "Adgre1", "H2-Ab1"),
+  "dendritic_cell" = c("Itgae", "H2-Oa"),
+  "monocyte" = c("Cd14"),
+  "myeloid_derived_supressor" = c("S100a9", "Siglecf"),
+  "cancer" = c("Sox9", "Krt8"),
+  "endothelial" = c("Cd34", "Vcam1")
+)
+
+# dotplots of marker genes
+all_marker_dotplot <- DotPlot(
+  pancvax,
+  group.by = "cell_type",
+  features = unname(unlist(markers))) +
+  theme(axis.text.y = element_text(angle = 25, vjust = 1, hjust=1, size = 8),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size = 8),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 10))
+ggsave(plot = all_marker_dotplot, filename = paste0(sup_figure_dir, "/all_dotplot_", "cell_type_markers", ".png"),
+         width = unit(8, "in"), height = unit(6, "in"))
+ggsave(plot = all_marker_dotplot, filename = paste0(sup_figure_dir, "/all_dotplot_", "cell_type_markers", ".pdf"),
+         width = unit(8, "in"), height = unit(6, "in"))
+# save plotted data
+write.csv(all_marker_dotplot$data, file = paste0(sup_figure_dir, "/all_dotplot_", "cell_type_markers", ".csv"), row.names = (1:nrow(all_marker_dotplot$data)))
+
+tcell_marker_dotplot <- DotPlot(
+  pancvax_t,
+  group.by = "cell_type",
+  features = unname(unlist(markers))) +
+  theme(axis.text.y = element_text(angle = 25, vjust = 1, hjust=1, size = 8),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size = 8),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 10))
+ggsave(plot = tcell_marker_dotplot, filename = paste0(sup_figure_dir, "/Tcell_dotplot_", "cell_type_markers", ".png"),
+         width = unit(8, "in"), height = unit(6, "in"))
+ggsave(plot = tcell_marker_dotplot, filename = paste0(sup_figure_dir, "/Tcell_dotplot_", "cell_type_markers", ".pdf"),
+         width = unit(8, "in"), height = unit(6, "in"))
+# save plotted data
+write.csv(tcell_marker_dotplot$data, file = paste0(sup_figure_dir, "/Tcell_dotplot_", "cell_type_markers", ".csv"), row.names = (1:nrow(tcell_marker_dotplot$data)))
+
+# Dimplots of each marker
+for(m in unname(unlist(markers))){
+  p_a <- FeaturePlot(pancvax, features = m) +
+    scale_color_gradientn(colors = c("#EEEEEE", "#FF0000", "#AA0000"),
+                          name = "Expression")
+  ggsave(plot = p_a, filename = paste0(sup_figure_dir, "/all_umap_", m, ".png"),
+         width = unit(4, "in"), height = unit(4, "in"))
+  ggsave(plot = p_a, filename = paste0(sup_figure_dir, "/all_umap_", m, ".pdf"),
+         width = unit(4, "in"), height = unit(4, "in"))
+  p_t <- FeaturePlot(pancvax_t, features = m) +
+    scale_color_gradientn(colors = c("#EEEEEE", "#FF0000", "#AA0000"),
+                          name = "Expression")
+  ggsave(plot = p_t, filename = paste0(sup_figure_dir, "/Tcell_umap_", m, ".png"),
+         width = unit(4, "in"), height = unit(4, "in"))
+  ggsave(plot = p_t, filename = paste0(sup_figure_dir, "/Tcell_umap_", m, ".pdf"),
+         width = unit(4, "in"), height = unit(4, "in"))
+  ggsave(plot = p_t + theme(legend.position = "none"), 
+         filename = paste0(sup_figure_dir, "/Tcell_umap_", m, "_noLegend.pdf"),
+         width = unit(4, "in"), height = unit(4, "in"))
+}
+
+# stacked barplots for CD45+ cells
+pvax_cd45 <- pancvax[,pancvax@assays$RNA@data["Ptprc",] > 0]
+FeaturePlot(pancvax, features = "Ptprc")
+FeaturePlot(pvax_cd45, features = "Ptprc")
+dim(pvax_cd45)
+
+cd45_stack <- stack_cell_porportions(seurat = pvax_cd45,
+                                     group.by.x = "treatment", 
+                                     group.by.stack = "cell_type")
+cd45_stack$x.group <- factor(cd45_stack$x.group,
+                             levels = c("Untreated",
+                                        "Anti-PD-1 + Anti-CTLA-4",
+                                        "PancVAX",
+                                        "PancVAX + Anti-PD-1 + Anti-CTLA-4"))
+p_cd45_stack <- plot_stack(prop_stacked = cd45_stack, 
+                           group.by.x = "treatment", group.by.stack = "cell_type",
+                           fill.palette = cell_palette)
+ggsave(plot = p_cd45_stack,
+       filename = paste0(sup_figure_dir, "/stacked_allCells.png"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+ggsave(plot = p_cd45_stack,
+       filename = paste0(sup_figure_dir, "/stacked_allCells.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+ggsave(plot = p_cd45_stack + theme(legend.position = "none"),
+       filename = paste0(sup_figure_dir, "/stacked_allCells_noLegend.png"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+ggsave(plot = p_cd45_stack + theme(legend.position = "none"),
+       filename = paste0(sup_figure_dir, "/stacked_allCells_noLegend.pdf"),
+       width = unit(6, "in"), height = unit(6, "in"), dpi = 300)
+
+
+cd45_t <- pvax_cd45[,pvax_cd45$cell_type %in% cell_groupings$CD8_cells |
+                      pvax_cd45$cell_type %in% cell_groupings$CD4_cells]
+
+cd45_t_stack <- stack_cell_porportions(seurat = cd45_t,
+                                       group.by.x = "treatment", 
+                                       group.by.stack = "cell_type")
+cd45_t_stack$x.group <- factor(cd45_t_stack$x.group,
+                                  levels = c("Untreated",
+                                             "Anti-PD-1 + Anti-CTLA-4",
+                                             "PancVAX",
+                                             "PancVAX + Anti-PD-1 + Anti-CTLA-4"))
+p_t_cd45_stack <- plot_stack(prop_stacked = cd45_t_stack, 
+                             group.by.x = "treatment", group.by.stack = "cell_type",
+                             title = "T Cell Composition",
+                             fill.palette = cell_palette)
+ggsave(plot = p_t_cd45_stack,
+       filename = paste0(sup_figure_dir, "/stacked_Tcells.png"),
+       width = unit(5, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_cd45_stack,
+       filename = paste0(sup_figure_dir, "/stacked_Tcells.pdf"),
+       width = unit(5, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_cd45_stack + theme(legend.position = "none"),
+       filename = paste0(sup_figure_dir, "/stacked_Tcells_noLegend.png"),
+       width = unit(4, "in"), height = unit(8, "in"), dpi = 300)
+ggsave(plot = p_t_cd45_stack + theme(legend.position = "none"),
+       filename = paste0(sup_figure_dir, "/stacked_Tcells_noLegend.pdf"),
+       width = unit(4, "in"), height = unit(8, "in"), dpi = 300)
+```
+
