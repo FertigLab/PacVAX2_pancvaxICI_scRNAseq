@@ -1,8 +1,3 @@
----
-output:
-  pdf_document: default
-  html_document: default
----
 # MHC class II-specific neoantigens enhance anti-tumor immunity of a personalized vaccine in murine pancreatic cancer
 
 ## Abstract
