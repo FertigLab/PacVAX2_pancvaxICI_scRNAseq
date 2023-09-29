@@ -1,0 +1,47 @@
+---
+title: "17_Generate_per-well_Processed_Data"
+author: "Jacob Mitchell"
+date: "2023-09-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Subsets the Seurat object containing the completely processed data into individual rds files per 10x well to include with the GEO submission
+
+```{r}
+library(Seurat)
+
+set.seed(123)
+sessionInfo()
+```
+
+```{r}
+result_dir <- "processed_data/17_Generate_per-well_Processed_Data"
+if(!dir.exists(result_dir)){dir.create(result_dir)}
+
+seurat <- readRDS("processed_data/10_Cell_Type_Labeling/10_cell_type_assigned_mouse_ici_scRNAseq.rds")
+```
+
+```{r}
+wells <- unique(seurat$'10x_well')
+for(i in 1:length(wells)){
+  well <- wells[i]
+  ser <- seurat[, seurat$'10x_well' == well]
+  
+  if(i < 10){well_name <- paste0(0, i)}
+  else{well_name <- i}
+  
+  print(paste0("well: ", well_name))
+  print(dim(ser))
+  
+  saveRDS(
+    ser,
+    file = paste0(result_dir, "/", well_name, "_processed_seurat.rds")
+  )
+}
+```
+
+
