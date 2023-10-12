@@ -13,7 +13,7 @@ This repository contains the scripts necessary to replicate the results in Figur
 
 ### Starting Raw Data
 
-Raw data for single-cell RNA-seq and TCR-seq can be downloaded from -----. Sequencing alignment was conducted with 10x Genomics CellRanger v4.0.0 using the mm10 reference genome. The resulting counts matrix should be stored in 
+Raw data for single-cell RNA-seq and TCR-seq can be downloaded from NIH GEO using accession [GSE244992](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE244992). Sequencing alignment was conducted with 10x Genomics CellRanger v4.0.0 using the mm10 reference genome. The resulting counts matrix should be stored in 
 
 ```
 data/filtered_bc_matrix/barcodes.tsv.gz
@@ -72,11 +72,11 @@ Load the RNA counts matrix into R as a Seurat object. Integrate TCR sequences as
 
 #### 02_seurat_preprocessing_qc.Rmd
 
-Quality control filtering of cells and genes in the RNA counts matrix. Genes were removed if they did not have non-zero expression in at least 3 cells. Cells were maintained in the counts matrix if they expressed between 200 and 3000 unique genes, had between 1000 and 10,000 UMIs, had counts from mitochondrial genes comprising less than 10% of total RNA counts, and had no expression of hemoglobin-encoding genes. 
+Quality control filtering of cells and genes in the RNA counts matrix. Genes were removed if they did not have non-zero expression in at least 3 cells. Cells were maintained in the counts matrix if they expressed between 200 and 3000 unique genes, had between 1000 and 10,000 UMIs, had counts from mitochondrial genes comprising less than 10\% of total RNA counts, and had no expression of hemoglobin-encoding genes. 
 
 #### 03_cell_cycle_scoring.Rmd
 
-Score cell cycle in cells using the module score function in Seurat and mouse orthologs of gene lists associated with S phase and G2/M phase from Kowalczyk et al., Genome Res., 2015 (10.1101/gr.192237.115).
+Score cell cycle in cells using the module score function in Seurat and mouse orthologs of gene lists associated with S phase and G2/M phase from Kowalczyk et al., Genome Res., 2015 (doi:10.1101/gr.192237.115).
 
 #### 04_Normalization_Scaling_PCA_and_Harmony_Batch_Correction.Rmd
 
